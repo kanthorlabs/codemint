@@ -7,7 +7,7 @@
 **Core Intent:** A modular AI orchestrator that translates high-level requirements into verified code via Agent Communication Protocol (ACP).
 
 ### The "Human-as-an-Agent" Pattern
-In CodeMint, the user is treated as a high-latency, asynchronous API. Do not write separate orchestration loops for AI execution vs. Human input. Instead, implement a unified `Agent` interface. When a task requires human review or input, assign it to the seeded `Human` agent. The system simply pushes the task payload and waits/blocks on a channel until the Unified UI (TUI/CUI) resolves it.
+In CodeMint, the user is treated as a high-latency, asynchronous API. Do not write separate orchestration loops for AI execution vs. Human input. Instead, implement a unified `Agent` interface. When a task requires human review or input, assign it to the seeded `human` agent. The system simply pushes the task payload and waits/blocks on a channel until the Unified UI (TUI/CUI) resolves it.
 
 ---
 
@@ -26,7 +26,7 @@ Use Go `database/sql` or `sqlx`. All table and column names **must be singular**
 | | `name` | TEXT | Unique project name |
 | | `working_dir` | TEXT | Absolute path to project root |
 | **`agent`** | `id` | TEXT (UUIDv7) | Primary Key |
-| | `name` | TEXT | e.g., "Human", "OpenCode-Primary" |
+| | `name` | TEXT | e.g., "human", "opencode-primary" |
 | | `type` | INTEGER | Enum: `0` (Human), `1` (Assistant) |
 | | `assistant` | TEXT | Config key mapping to `config.yaml` |
 | **`session`** | `id` | TEXT (UUIDv7) | Primary Key |
@@ -40,10 +40,13 @@ Use Go `database/sql` or `sqlx`. All table and column names **must be singular**
 | | `session_id` | TEXT (UUIDv7) | FK to `session.id` |
 | | `workflow_id` | TEXT (UUIDv7) | Optional FK to `workflow.id` |
 | | `assignee_id` | TEXT (UUIDv7) | FK to `agent.id` |
+| | `seq_epic` | INTEGER | Order mapping for the Brainstormer linear graph |
+| | `seq_story` | INTEGER | Order mapping for the Brainstormer linear graph |
+| | `seq_task` | INTEGER | Order mapping for the Brainstormer linear graph |
 | | `type` | INTEGER | Enum: `0`:Coding, `1`:Verification, `2`:Confirmation, `3`:Coordination |
 | | `status` | INTEGER | Task status enum (See Section 3) |
-| | `input_data` | TEXT | JSON blob of context/prompt |
-| | `output_data` | TEXT | JSON blob of result/diff/logs |
+| | `input` | TEXT | JSON blob of context/prompt |
+| | `output` | TEXT | JSON blob of result/diff/logs |
 
 ### 2.3 The "Single Active Session" Constraint
 **CRITICAL:** To prevent file system corruption in the `working_dir`, a project can only have **one** active session at a time.
@@ -62,7 +65,7 @@ Tasks are the atomic units of work. Define these as a custom type in Go (e.g., `
 * **`awaiting` (2):** **Blocking state.** The task is paused for Human input or a dependent resource. The scheduler must not advance dependent tasks.
 
 ### Terminal States (Immutable)
-Once a task hits one of these states, its `output_data` and `status` are locked.
+Once a task hits one of these states, its `output` and `status` are locked.
 * **`success` (3):** Goal met, changes committed to the `working_dir`.
 * **`failure` (4):** Execution finished, but logic failed (e.g., failed tests) or an unrecoverable system issue occurred.
 * **`completed` (5):** Process finished with a neutral/informational outcome (e.g., a status report).
@@ -75,7 +78,7 @@ Once a task hits one of these states, its `output_data` and `status` are locked.
 
 ### 4.1 Hybrid Router
 Incoming requests (via TUI or CUI) pass through a dual-path router:
-1.  **Command Parser (Deterministic):** Uses Regex/Argparse to catch slash commands (`/project-new`, `/task-status`, `/approve <id>`). Executes immediately, bypassing AI.
+1.  **Command Parser (Deterministic):** Uses strict prefix matching (e.g., `^/`) to catch valid slash commands (`/project-new`, `/task-status`, `/approve <id>`). Executes immediately, bypassing AI.
 2.  **Coordinator AI (Probabilistic):** Uses a lightweight LLM. Evaluates natural language through a **Binary Context Gateway**:
     * *Context-Aware:* Requires `working_dir` knowledge. Routes to **Project Coding** workflow.
     * *Non-Context:* General inquiries. Routes to **Communication** or **Daily Checking** workflows.
@@ -86,10 +89,10 @@ Workflows are not hardcoded if/else blocks.
 * Register them in a Go map (e.g., `map[int]Workflow`).
 * Core workflows to scaffold: `Project Coding` (Primary), `Communication`, `Daily Checking`.
 
-### 4.3 Unified UI ("First-In-Wins")
-* **TUI (Bubble Tea):** Renders interactive lists.
-* **CUI (Telegram/Slack):** Sends inline buttons or expects slash commands.
-* **State Sync:** Both UI drivers listen to the same Go channel for `awaiting` Human Agent tasks. Whichever interface receives the user's action first processes it and updates the other view.
+### 4.3 Unified UI (The Mediator Pattern)
+* **The Mediator (`UIMediator`):** Instead of the core scheduler directly coupling with or managing channel races across UIs, a central `UIMediator` struct handles presentation routing.
+* **TUI & CUI as Colleagues:** The Bubble Tea TUI and Telegram CUI register as `UIAdapter` instances with the Mediator.
+* **State Sync:** When a task enters `awaiting`, the Core Scheduler asks the Mediator for an approval. The Mediator broadcasts to all registered adapters. It uses a Go `select` statement to capture the *first* response received. Upon receiving it, the Mediator immediately returns the decision to the core and sends a sync/cancellation signal to the other interfaces to dismiss their pending prompts.
 
 ---
 
@@ -108,9 +111,6 @@ When a Coding task finishes `processing`, it **always** transitions to `awaiting
 
 ### 5.3 Agent Crash Fallback
 If the `os/exec` process for the ACP agent panics, crashes, or times out during `processing` or while staged:
-1.  Reassign the `task.assignee_id` to the **Human Agent**'s UUID.
+1.  Reassign the `task.assignee_id` to the **human** agent's UUID.
 2.  Keep/Move status to `awaiting`.
 3.  Notify the user via UI: *"Agent crashed. Please manually reconcile the working directory and resolve the task status."*
-
----
-**End of Spec - EPIC-01**
