@@ -97,19 +97,21 @@ type Workflow struct {
 }
 
 // Task is the atomic unit of work assigned to an agent.
+// Input and Output are stored as JSON text in SQLite; callers may
+// json.Unmarshal them into concrete types as needed.
 type Task struct {
-	ID         string          `db:"id"`
-	ProjectID  string          `db:"project_id"`
-	SessionID  string          `db:"session_id"`
-	WorkflowID string          `db:"workflow_id"`
-	AssigneeID string          `db:"assignee_id"`
-	SeqEpic    int             `db:"seq_epic"`
-	SeqStory   int             `db:"seq_story"`
-	SeqTask    int             `db:"seq_task"`
-	Type       TaskType        `db:"type"`
-	Status     TaskStatus      `db:"status"`
-	Input      json.RawMessage `db:"input"`
-	Output     json.RawMessage `db:"output"`
+	ID         string     `db:"id"`
+	ProjectID  string     `db:"project_id"`
+	SessionID  string     `db:"session_id"`
+	WorkflowID string     `db:"workflow_id"`
+	AssigneeID string     `db:"assignee_id"`
+	SeqEpic    int        `db:"seq_epic"`
+	SeqStory   int        `db:"seq_story"`
+	SeqTask    int        `db:"seq_task"`
+	Type       TaskType   `db:"type"`
+	Status     TaskStatus `db:"status"`
+	Input      string     `db:"input"`
+	Output     string     `db:"output"`
 }
 
 // --- Factory Constructors ---
