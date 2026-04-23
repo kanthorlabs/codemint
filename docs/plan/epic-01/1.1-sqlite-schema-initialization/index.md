@@ -1,7 +1,7 @@
 # User Story 1.1: SQLite Schema Initialization
 
 * **As the** Go Orchestrator,
-* **I want to** automatically initialize a local SQLite database with singular table names (`project`, `agent`, `session`, `workflow`, `task`) upon first run,
+* **I want to** automatically initialize a local SQLite database with singular table names (`project`, `project_permission`, `agent`, `session`, `workflow`, `task`) upon first run,
 * **So that** CodeMint has a robust, local, single-file persistence layer ready immediately.
 * *Acceptance Criteria:*
     * Schema creation uses `database/sql` or `sqlx`.
