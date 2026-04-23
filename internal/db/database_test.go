@@ -1,9 +1,13 @@
 package db
 
 import (
+	"context"
 	"testing"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/pressly/goose/v3"
+
+	"codemint.kanthorlabs.com/internal/repository/sqlite"
 )
 
 // expectedTables lists all tables that must exist after migration Up.
@@ -17,23 +21,31 @@ var expectedTables = []string{
 }
 
 func TestInitDB(t *testing.T) {
-	db, err := InitDB("file::memory:?cache=shared")
+	// Bootstrap a bare connection so we can construct the agentRepo before InitDB.
+	// InitDB will run migrations on this same connection and then seed agents.
+	bare, err := sqlx.Connect("sqlite", "file::memory:?cache=shared")
+	if err != nil {
+		t.Fatalf("open bare connection: %v", err)
+	}
+	defer bare.Close()
+
+	agentRepo := sqlite.NewAgentRepo(bare)
+
+	db, err := InitDB(context.Background(), "file::memory:?cache=shared", agentRepo)
 	if err != nil {
 		t.Fatalf("InitDB returned error: %v", err)
 	}
 	if db == nil {
 		t.Fatal("InitDB returned nil *sqlx.DB")
 	}
-	defer db.Close()
 
 	// Verify each expected table exists in sqlite_master.
 	for _, table := range expectedTables {
 		var count int
-		err := db.QueryRow(
+		if err := db.QueryRow(
 			`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`,
 			table,
-		).Scan(&count)
-		if err != nil {
+		).Scan(&count); err != nil {
 			t.Errorf("querying sqlite_master for table %q: %v", table, err)
 			continue
 		}
