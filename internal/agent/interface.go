@@ -13,7 +13,10 @@ import (
 // CodeMint only drives the state machine and records outcomes.
 type CodingAgent interface {
 	// ExecuteTask dispatches the task to the coding agent for processing.
-	// On success the task status transitions to Awaiting, awaiting human review.
+	// Implementations must derive a context.WithTimeout from the provided ctx
+	// using task.Timeout (milliseconds) so that the underlying os/exec process
+	// is killed if it exceeds the deadline. On success the task status
+	// transitions to Awaiting, awaiting human review.
 	ExecuteTask(ctx context.Context, task *domain.Task) error
 
 	// Accept finalises the agent's changes. The task name and metadata may be

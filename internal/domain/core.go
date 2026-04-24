@@ -96,6 +96,10 @@ type Workflow struct {
 	Type      int    `db:"type"`
 }
 
+// DefaultTaskTimeout is the default timeout for a task in milliseconds (1 hour).
+// It ensures that no agent process can hang indefinitely.
+const DefaultTaskTimeout int64 = 3_600_000
+
 // Task is the atomic unit of work assigned to an agent.
 // Input and Output are stored as JSON text in SQLite; callers may
 // json.Unmarshal them into concrete types as needed.
@@ -110,8 +114,12 @@ type Task struct {
 	SeqTask    int        `db:"seq_task"`
 	Type       TaskType   `db:"type"`
 	Status     TaskStatus `db:"status"`
-	Input      string     `db:"input"`
-	Output     string     `db:"output"`
+	// Timeout is the maximum duration in milliseconds the agent is allowed to
+	// run before the process is killed and the task is transitioned to Failure.
+	// Defaults to DefaultTaskTimeout (1 hour) when not explicitly set.
+	Timeout int64  `db:"timeout"`
+	Input   string `db:"input"`
+	Output  string `db:"output"`
 }
 
 // --- Factory Constructors ---
@@ -162,7 +170,9 @@ func NewWorkflow(sessionID string, workflowType int) *Workflow {
 	}
 }
 
-// NewTask creates a new Task with a generated UUID v7 primary key, defaulting to Pending status.
+// NewTask creates a new Task with a generated UUID v7 primary key, defaulting
+// to Pending status and DefaultTaskTimeout (1 hour) to ensure no process hangs
+// indefinitely.
 func NewTask(projectID, sessionID, workflowID, assigneeID string, taskType TaskType) *Task {
 	return &Task{
 		ID:         idgen.MustNew(),
@@ -172,5 +182,6 @@ func NewTask(projectID, sessionID, workflowID, assigneeID string, taskType TaskT
 		AssigneeID: assigneeID,
 		Type:       taskType,
 		Status:     TaskStatusPending,
+		Timeout:    DefaultTaskTimeout,
 	}
 }

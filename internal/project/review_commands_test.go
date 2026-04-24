@@ -48,6 +48,10 @@ func (m *mockTaskRepo) UpdateTaskStatus(_ context.Context, _ string, status doma
 	return m.updateStatusErr
 }
 
+func (m *mockTaskRepo) UpdateAssignee(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 // --- Mock CodingAgent ---
 
 type mockCodingAgent struct {
@@ -233,6 +237,60 @@ func TestRevertHandler_NotAwaiting(t *testing.T) {
 func TestAcceptHandler_MissingTaskID(t *testing.T) {
 	rc := NewReviewCommands(&mockTaskRepo{}, &mockCodingAgent{})
 	handler := rc.acceptHandler()
+
+	_, err := handler(context.Background(), nil, []string{}, "")
+	if err == nil {
+		t.Fatal("expected error for missing task_id, got nil")
+	}
+}
+
+// --- Test: Discard Happy Path ---
+
+// TestDiscardHandler_HappyPath asserts that a Coding task returns the stub
+// placeholder message without error.
+func TestDiscardHandler_HappyPath(t *testing.T) {
+	task := awaitingTask(idgen.MustNew(), idgen.MustNew(), idgen.MustNew())
+	task.Type = domain.TaskTypeCoding
+	repo := &mockTaskRepo{task: task}
+	ag := &mockCodingAgent{}
+
+	rc := NewReviewCommands(repo, ag)
+	handler := rc.discardHandler()
+
+	result, err := handler(context.Background(), nil, []string{task.ID}, "")
+	if err != nil {
+		t.Fatalf("discardHandler returned unexpected error: %v", err)
+	}
+	if result.Message == "" {
+		t.Error("expected a non-empty result message")
+	}
+}
+
+// TestDiscardHandler_NonCodingTask asserts that the discard handler rejects
+// tasks that are not of type TaskTypeCoding.
+func TestDiscardHandler_NonCodingTask(t *testing.T) {
+	task := awaitingTask(idgen.MustNew(), idgen.MustNew(), idgen.MustNew())
+	task.Type = domain.TaskTypeVerification
+	repo := &mockTaskRepo{task: task}
+	ag := &mockCodingAgent{}
+
+	rc := NewReviewCommands(repo, ag)
+	handler := rc.discardHandler()
+
+	_, err := handler(context.Background(), nil, []string{task.ID}, "")
+	if err == nil {
+		t.Fatal("expected error for non-Coding task, got nil")
+	}
+	if !errors.Is(err, ErrTaskNotCodingType) {
+		t.Errorf("expected ErrTaskNotCodingType, got: %v", err)
+	}
+}
+
+// TestDiscardHandler_MissingTaskID asserts that the discard handler returns an
+// error when no task_id argument is supplied.
+func TestDiscardHandler_MissingTaskID(t *testing.T) {
+	rc := NewReviewCommands(&mockTaskRepo{}, &mockCodingAgent{})
+	handler := rc.discardHandler()
 
 	_, err := handler(context.Background(), nil, []string{}, "")
 	if err == nil {

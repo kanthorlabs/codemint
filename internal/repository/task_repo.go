@@ -41,4 +41,8 @@ type TaskRepository interface {
 	// modify the task output field, making it suitable for pure state transitions
 	// such as those triggered by the Accept/Revert review commands.
 	UpdateTaskStatus(ctx context.Context, taskID string, status domain.TaskStatus) error
+
+	// UpdateAssignee reassigns a task to a different agent. This is used by the
+	// crash fallback flow (Story 1.9) to hand a failed task back to the human.
+	UpdateAssignee(ctx context.Context, taskID string, assigneeID string) error
 }

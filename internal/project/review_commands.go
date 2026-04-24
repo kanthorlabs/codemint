@@ -18,6 +18,10 @@ import (
 // task that is not in the TaskStatusAwaiting state.
 var ErrTaskNotAwaiting = errors.New("project: task is not in Awaiting state")
 
+// ErrTaskNotCodingType is returned when the discard command targets a task
+// that is not of type TaskTypeCoding.
+var ErrTaskNotCodingType = errors.New("project: discard is only available for Coding tasks")
+
 // ReviewCommands holds the dependencies required by the accept/revert handlers.
 type ReviewCommands struct {
 	taskRepo    repository.TaskRepository
@@ -30,8 +34,8 @@ func NewReviewCommands(taskRepo repository.TaskRepository, codingAgent agent.Cod
 	return &ReviewCommands{taskRepo: taskRepo, codingAgent: codingAgent}
 }
 
-// Register wires the `/task accept` and `/task revert` sub-commands into r.
-// Both commands are available in all client modes (CLI and Daemon).
+// Register wires the `/task accept`, `/task revert`, and `/task discard`
+// sub-commands into r. All commands are available in all client modes.
 func (rc *ReviewCommands) Register(r *registry.CommandRegistry) error {
 	commands := []registry.Command{
 		{
@@ -45,6 +49,12 @@ func (rc *ReviewCommands) Register(r *registry.CommandRegistry) error {
 			Description: "Revert an awaiting task, rolling back the agent's changes.",
 			Usage:       "/task revert <task_id>",
 			Handler:     rc.revertHandler(),
+		},
+		{
+			Name:        "task discard",
+			Description: "Discard the working-directory changes left by a crashed Coding Agent.",
+			Usage:       "/task discard <task_id>",
+			Handler:     rc.discardHandler(),
 		},
 	}
 
@@ -152,4 +162,39 @@ func requireTaskID(args []string) (string, error) {
 		return "", fmt.Errorf("project: task_id argument is required")
 	}
 	return args[0], nil
+}
+
+// discardHandler returns the Handler for `/task discard <task_id>`.
+//
+// This command is a placeholder for the OS-level git restore/clean operation
+// that will discard working-directory changes left by a crashed Coding Agent.
+// It is only available for tasks of type TaskTypeCoding.
+//
+// Flow:
+//  1. Verify the task exists and is of type TaskTypeCoding.
+//  2. Stub: TODO: Implement OS-level git restore/clean.
+//  3. Return a CommandResult informing the user.
+func (rc *ReviewCommands) discardHandler() registry.Handler {
+	return func(ctx context.Context, _ registry.ActiveSessionInfo, args []string, _ string) (registry.CommandResult, error) {
+		taskID, err := requireTaskID(args)
+		if err != nil {
+			return registry.CommandResult{}, err
+		}
+
+		task, err := rc.taskRepo.FindByID(ctx, taskID)
+		if err != nil {
+			return registry.CommandResult{}, fmt.Errorf("project: discard: fetch task %q: %w", taskID, err)
+		}
+		if task.Type != domain.TaskTypeCoding {
+			return registry.CommandResult{}, fmt.Errorf("%w: task %q has type %d", ErrTaskNotCodingType, taskID, task.Type)
+		}
+
+		// TODO: Implement OS-level git restore/clean to discard working-directory
+		// changes left by the crashed Coding Agent.
+
+		return registry.CommandResult{
+			Message: fmt.Sprintf("Task %q discard is not yet implemented. Please manually run `git restore .` and `git clean -fd` in the working directory.", taskID),
+			Action:  registry.ActionNone,
+		}, nil
+	}
 }

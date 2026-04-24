@@ -44,14 +44,19 @@ func setupTaskFixtures(t *testing.T) (repo *taskRepo, projectID, sessionID, agen
 func insertRawTask(t *testing.T, repo *taskRepo, task *domain.Task) {
 	t.Helper()
 	ctx := context.Background()
+	timeout := task.Timeout
+	if timeout == 0 {
+		timeout = domain.DefaultTaskTimeout
+	}
 	_, err := repo.db.ExecContext(ctx, `
 		INSERT INTO task
 		  (id, project_id, session_id, workflow_id, assignee_id,
-		   seq_epic, seq_story, seq_task, type, status, input, output)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		   seq_epic, seq_story, seq_task, type, status, timeout, input, output)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID, task.ProjectID, task.SessionID, task.WorkflowID, task.AssigneeID,
 		task.SeqEpic, task.SeqStory, task.SeqTask,
 		int(task.Type), int(task.Status),
+		timeout,
 		string(task.Input), string(task.Output),
 	)
 	if err != nil {
@@ -176,6 +181,7 @@ func TestUpdateStatus_ValidTransitions(t *testing.T) {
 		{"Awaiting→Processing", domain.TaskStatusAwaiting, domain.TaskStatusProcessing},
 		{"Awaiting→Reverted", domain.TaskStatusAwaiting, domain.TaskStatusReverted},
 		{"Awaiting→Cancelled", domain.TaskStatusAwaiting, domain.TaskStatusCancelled},
+		{"Failure→Awaiting (crash fallback: Story 1.9)", domain.TaskStatusFailure, domain.TaskStatusAwaiting},
 		{"Success→Processing (revise)", domain.TaskStatusSuccess, domain.TaskStatusProcessing},
 		{"Success→Completed", domain.TaskStatusSuccess, domain.TaskStatusCompleted},
 		{"Pending→Reverted", domain.TaskStatusPending, domain.TaskStatusReverted},
@@ -278,5 +284,52 @@ func TestFindInterrupted(t *testing.T) {
 	}
 	if interrupted[0].ID != processing.ID {
 		t.Errorf("wrong task returned: got %q, want %q", interrupted[0].ID, processing.ID)
+	}
+}
+
+// TestUpdateAssignee_Success asserts that UpdateAssignee reassigns the task
+// to a new agent and the change is persisted.
+func TestUpdateAssignee_Success(t *testing.T) {
+	repo, projectID, sessionID, agentID := setupTaskFixtures(t)
+	ctx := context.Background()
+
+	// Insert a second agent to reassign to.
+	newAgentID := idgen.MustNew()
+	if _, err := repo.db.ExecContext(ctx,
+		`INSERT INTO agent (id, name, type, assistant) VALUES (?, ?, ?, ?)`,
+		newAgentID, "human2", 0, "",
+	); err != nil {
+		t.Fatalf("seed second agent: %v", err)
+	}
+
+	task := &domain.Task{
+		ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+		AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 1,
+		Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending,
+	}
+	insertRawTask(t, repo, task)
+
+	if err := repo.UpdateAssignee(ctx, task.ID, newAgentID); err != nil {
+		t.Fatalf("UpdateAssignee returned unexpected error: %v", err)
+	}
+
+	var got string
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT assignee_id FROM task WHERE id = ?`, task.ID,
+	).Scan(&got); err != nil {
+		t.Fatalf("read assignee_id: %v", err)
+	}
+	if got != newAgentID {
+		t.Errorf("assignee_id: got %q, want %q", got, newAgentID)
+	}
+}
+
+// TestUpdateAssignee_NotFound asserts that UpdateAssignee returns an error
+// when the task does not exist.
+func TestUpdateAssignee_NotFound(t *testing.T) {
+	repo, _, _, _ := setupTaskFixtures(t)
+	err := repo.UpdateAssignee(context.Background(), idgen.MustNew(), idgen.MustNew())
+	if err == nil {
+		t.Fatal("expected error for non-existent task, got nil")
 	}
 }

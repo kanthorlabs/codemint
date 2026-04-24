@@ -8,3 +8,9 @@
     * When `PromptDecision` is called, the Mediator broadcasts the request to all registered adapters concurrently.
     * The Mediator uses a Go `select` block to capture the *first* response received.
     * Upon receiving the first response, the Mediator sends a cancellation/sync signal to all other adapters so they dismiss their pending prompts.
+
+---
+
+## References:
+
+* [Mediator Pattern](https://refactoring.guru/design-patterns/mediator)

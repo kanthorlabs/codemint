@@ -19,14 +19,15 @@ var ErrInvalidTransition = errors.New("sqlite: invalid task state transition")
 
 // validFromStates maps each target TaskStatus to the set of source statuses
 // that are permitted to transition into it. Claim owns Pending→Processing, so
-// that edge is intentionally absent here. Terminal states (Failure, Completed,
+// that edge is intentionally absent here. Terminal states (Completed,
 // Reverted, Cancelled) have no outgoing edges and are therefore absent as keys.
 //
-// Transition table (derived from docs/plan/epic-01/1.5-task-state-machine-enforcement/tasks.md §2):
+// Transition table (derived from docs/plan/epic-01/1.5-task-state-machine-enforcement/tasks.md §2
+// and extended by Story 1.9 to allow Failure→Awaiting for the crash-fallback flow):
 //
 //	Pending(0)    ← Processing(1)         [safe-recovery reset]
 //	Processing(1) ← Awaiting(2), Success(3) [resume / revise]
-//	Awaiting(2)   ← Processing(1)
+//	Awaiting(2)   ← Processing(1), Failure(4) [crash fallback: Story 1.9]
 //	Success(3)    ← Processing(1)
 //	Failure(4)    ← Processing(1)
 //	Completed(5)  ← Success(3)
@@ -35,7 +36,7 @@ var ErrInvalidTransition = errors.New("sqlite: invalid task state transition")
 var validFromStates = map[domain.TaskStatus][]domain.TaskStatus{
 	domain.TaskStatusPending:    {domain.TaskStatusProcessing},
 	domain.TaskStatusProcessing: {domain.TaskStatusAwaiting, domain.TaskStatusSuccess},
-	domain.TaskStatusAwaiting:   {domain.TaskStatusProcessing},
+	domain.TaskStatusAwaiting:   {domain.TaskStatusProcessing, domain.TaskStatusFailure},
 	domain.TaskStatusSuccess:    {domain.TaskStatusProcessing},
 	domain.TaskStatusFailure:    {domain.TaskStatusProcessing},
 	domain.TaskStatusCompleted:  {domain.TaskStatusSuccess},
@@ -61,7 +62,7 @@ var _ repository.TaskRepository = (*taskRepo)(nil)
 func (r *taskRepo) Next(ctx context.Context, sessionID string) (*domain.Task, error) {
 	const query = `
 		SELECT id, project_id, session_id, workflow_id, assignee_id,
-		       seq_epic, seq_story, seq_task, type, status, input, output
+		       seq_epic, seq_story, seq_task, type, status, timeout, input, output
 		FROM task
 		WHERE session_id = ?
 		  AND status IN (0, 2)
@@ -143,7 +144,7 @@ func (r *taskRepo) UpdateStatus(ctx context.Context, taskID string, status domai
 func (r *taskRepo) FindByID(ctx context.Context, taskID string) (*domain.Task, error) {
 	const query = `
 		SELECT id, project_id, session_id, workflow_id, assignee_id,
-		       seq_epic, seq_story, seq_task, type, status, input, output
+		       seq_epic, seq_story, seq_task, type, status, timeout, input, output
 		FROM task
 		WHERE id = ?`
 
@@ -196,7 +197,7 @@ func (r *taskRepo) UpdateTaskStatus(ctx context.Context, taskID string, status d
 func (r *taskRepo) FindInterrupted(ctx context.Context, sessionID string) ([]*domain.Task, error) {
 	const query = `
 		SELECT id, project_id, session_id, workflow_id, assignee_id,
-		       seq_epic, seq_story, seq_task, type, status, input, output
+		       seq_epic, seq_story, seq_task, type, status, timeout, input, output
 		FROM task
 		WHERE session_id = ?
 		  AND status = 1
@@ -207,4 +208,24 @@ func (r *taskRepo) FindInterrupted(ctx context.Context, sessionID string) ([]*do
 		return nil, fmt.Errorf("sqlite: find interrupted tasks for session %q: %w", sessionID, err)
 	}
 	return tasks, nil
+}
+
+// UpdateAssignee reassigns a task to a different agent. Used by the crash
+// fallback flow (Story 1.9) to hand a failed task back to the human agent.
+func (r *taskRepo) UpdateAssignee(ctx context.Context, taskID string, assigneeID string) error {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE task SET assignee_id = ? WHERE id = ?`,
+		assigneeID, taskID,
+	)
+	if err != nil {
+		return fmt.Errorf("sqlite: update assignee for task %q: %w", taskID, err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: update assignee rows affected for task %q: %w", taskID, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("sqlite: task %q not found", taskID)
+	}
+	return nil
 }
