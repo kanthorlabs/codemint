@@ -138,6 +138,59 @@ func (r *taskRepo) UpdateStatus(ctx context.Context, taskID string, status domai
 	return nil
 }
 
+// FindByID returns the Task with the given primary key. It returns an error
+// wrapping sql.ErrNoRows (as a descriptive message) when no matching row exists.
+func (r *taskRepo) FindByID(ctx context.Context, taskID string) (*domain.Task, error) {
+	const query = `
+		SELECT id, project_id, session_id, workflow_id, assignee_id,
+		       seq_epic, seq_story, seq_task, type, status, input, output
+		FROM task
+		WHERE id = ?`
+
+	var t domain.Task
+	err := r.db.GetContext(ctx, &t, query, taskID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("sqlite: task %q not found", taskID)
+		}
+		return nil, fmt.Errorf("sqlite: find task by id %q: %w", taskID, err)
+	}
+	return &t, nil
+}
+
+// UpdateTaskStatus transitions a task to the given status without altering the
+// output field. It reuses the same validFromStates machine as UpdateStatus so
+// that all state-machine rules are enforced consistently.
+func (r *taskRepo) UpdateTaskStatus(ctx context.Context, taskID string, status domain.TaskStatus) error {
+	allowed, ok := validFromStates[status]
+	if !ok || len(allowed) == 0 {
+		return fmt.Errorf("%w: no valid source states for target %d", ErrInvalidTransition, status)
+	}
+
+	placeholders := strings.Repeat("?,", len(allowed))
+	placeholders = placeholders[:len(placeholders)-1]
+	query := fmt.Sprintf(
+		`UPDATE task SET status = ? WHERE id = ? AND status IN (%s) RETURNING id`,
+		placeholders,
+	)
+
+	args := make([]any, 0, 2+len(allowed))
+	args = append(args, int(status), taskID)
+	for _, s := range allowed {
+		args = append(args, int(s))
+	}
+
+	var returned string
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(&returned)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: task %q cannot move to status %d", ErrInvalidTransition, taskID, status)
+	}
+	if err != nil {
+		return fmt.Errorf("sqlite: update task status %q: %w", taskID, err)
+	}
+	return nil
+}
+
 // FindInterrupted returns all tasks in the given session that are stuck in
 // the Processing (1) state, indicating the process may have crashed mid-execution.
 func (r *taskRepo) FindInterrupted(ctx context.Context, sessionID string) ([]*domain.Task, error) {

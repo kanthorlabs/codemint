@@ -7,3 +7,9 @@
     * If the `os/exec` process panics or times out, the task's `assignee_id` is automatically reassigned to the human Agent.
     * The task status is forced to `awaiting`.
     * The UI displays: *"Agent crashed. Please manually reconcile the working directory and resolve the task status."*.
+
+---
+
+## Change Request
+
+- Add a command to allow user easily discard changes of crash agent, only available for Coding Agent now. The command is just the placeholder right now, we will implement it later.

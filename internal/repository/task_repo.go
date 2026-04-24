@@ -30,4 +30,15 @@ type TaskRepository interface {
 	// in the Processing (1) state, indicating a possible crash mid-execution.
 	// This method is read-only; it does not modify any task state.
 	FindInterrupted(ctx context.Context, sessionID string) ([]*domain.Task, error)
+
+	// FindByID returns the Task with the given ID, or an error if it does not
+	// exist. This is used by review command handlers to validate pre-conditions
+	// before delegating to the CodingAgent.
+	FindByID(ctx context.Context, taskID string) (*domain.Task, error)
+
+	// UpdateTaskStatus transitions a task to the given status, enforcing the
+	// state machine defined in validFromStates. Unlike UpdateStatus it does not
+	// modify the task output field, making it suitable for pure state transitions
+	// such as those triggered by the Accept/Revert review commands.
+	UpdateTaskStatus(ctx context.Context, taskID string, status domain.TaskStatus) error
 }
