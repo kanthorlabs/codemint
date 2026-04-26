@@ -35,7 +35,7 @@ type ACPCommandDeps struct {
 	UIMediator    registry.UIMediator
 }
 
-// RegisterACPCommands registers ACP worker commands (/acp, /acp-status, /acp-stop).
+// RegisterACPCommands registers ACP worker commands (/acp, /acp-status, /acp-stop, /acp-reset).
 func RegisterACPCommands(r *registry.CommandRegistry, deps *ACPCommandDeps) error {
 	commands := []registry.Command{
 		{
@@ -58,6 +58,13 @@ func RegisterACPCommands(r *registry.CommandRegistry, deps *ACPCommandDeps) erro
 			Usage:          "/acp-stop",
 			SupportedModes: []registry.ClientMode{registry.ClientModeCLI, registry.ClientModeDaemon},
 			Handler:        acpStopHandler(deps),
+		},
+		{
+			Name:           "acp-reset",
+			Description:    "Reset the ACP context (flush conversation memory without killing the worker).",
+			Usage:          "/acp-reset",
+			SupportedModes: []registry.ClientMode{registry.ClientModeCLI, registry.ClientModeDaemon},
+			Handler:        acpResetHandler(deps),
 		},
 	}
 
@@ -318,6 +325,67 @@ func acpStopHandler(deps *ACPCommandDeps) registry.Handler {
 	}
 }
 
+// acpResetHandler handles the /acp-reset command.
+// It resets the ACP context by calling Worker.ResetContext, which creates a fresh
+// ACP session without killing the worker process. This flushes the conversation
+// memory while keeping the worker alive.
+func acpResetHandler(deps *ACPCommandDeps) registry.Handler {
+	return func(ctx context.Context, active registry.ActiveSessionInfo, args []string, _ string) (registry.CommandResult, error) {
+		// Check if we have a session.
+		session := deps.ActiveSession.GetSession()
+		if session == nil {
+			return registry.CommandResult{
+				Message: "No active session.",
+				Action:  registry.ActionNone,
+			}, nil
+		}
+
+		// Get the ACP registry.
+		acpReg := deps.ActiveSession.ACPRegistry()
+		if acpReg == nil {
+			return registry.CommandResult{
+				Message: "ACP registry not available.",
+				Action:  registry.ActionNone,
+			}, nil
+		}
+
+		// Check if we have a worker.
+		worker, ok := acpReg.Get(session.ID)
+		if !ok {
+			return registry.CommandResult{
+				Message: "No ACP worker running for this session. Use /acp to start one.",
+				Action:  registry.ActionNone,
+			}, nil
+		}
+
+		// Get the current ACP session ID.
+		oldSessionID := deps.ActiveSession.GetACPSessionID()
+
+		// Reset the context.
+		newSessionID, err := worker.ResetContext(ctx, oldSessionID)
+		if err != nil {
+			return registry.CommandResult{
+				Message: fmt.Sprintf("Failed to reset ACP context: %v", err),
+				Action:  registry.ActionNone,
+			}, nil
+		}
+
+		// Update the stored ACP session ID.
+		deps.ActiveSession.SetACPSessionID(newSessionID)
+
+		// Record the interaction as a coordination task if we have repos.
+		project := deps.ActiveSession.GetProject()
+		if deps.TaskRepo != nil && deps.AgentRepo != nil && project != nil {
+			go recordACPResetInteraction(context.Background(), deps)
+		}
+
+		return registry.CommandResult{
+			Message: fmt.Sprintf("ACP context reset (new session: %s)", newSessionID),
+			Action:  registry.ActionNone,
+		}, nil
+	}
+}
+
 // createACPSession creates a new ACP session by sending session/new.
 func createACPSession(ctx context.Context, worker *acp.Worker) (string, error) {
 	req, err := acp.NewRequest(acp.MethodSessionNew, acp.SessionNewParams{})
@@ -388,6 +456,37 @@ func recordACPInteraction(ctx context.Context, deps *ACPCommandDeps, prompt stri
 		domain.TaskTypeCoordination,
 	)
 	task.Input.String = fmt.Sprintf(`{"command":"/acp","prompt":"%s"}`, prompt)
+	task.Input.Valid = true
+	task.Status = domain.TaskStatusCompleted
+	task.ClientID.String = deps.ActiveSession.GetClientID()
+	task.ClientID.Valid = true
+
+	_ = deps.TaskRepo.Create(ctx, task)
+}
+
+// recordACPResetInteraction records the ACP reset as a coordination task.
+func recordACPResetInteraction(ctx context.Context, deps *ACPCommandDeps) {
+	project := deps.ActiveSession.GetProject()
+	session := deps.ActiveSession.GetSession()
+	if project == nil || session == nil {
+		return
+	}
+
+	// Get system agent.
+	systemAgent, err := deps.AgentRepo.FindByName(ctx, "System")
+	if err != nil || systemAgent == nil {
+		return
+	}
+
+	// Create coordination task.
+	task := domain.NewTask(
+		project.ID,
+		session.ID,
+		"", // No workflow
+		systemAgent.ID,
+		domain.TaskTypeCoordination,
+	)
+	task.Input.String = `{"command":"/acp-reset"}`
 	task.Input.Valid = true
 	task.Status = domain.TaskStatusCompleted
 	task.ClientID.String = deps.ActiveSession.GetClientID()

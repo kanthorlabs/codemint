@@ -29,6 +29,9 @@ var ErrWorkerExited = errors.New("acp: worker process exited")
 // ErrWorkerNotStarted is returned when the worker failed to start.
 var ErrWorkerNotStarted = errors.New("acp: worker not started")
 
+// ErrWorkerClosed is returned when attempting to reset context on a closed worker.
+var ErrWorkerClosed = errors.New("acp: worker is closed")
+
 // WorkerConfig configures the ACP worker process.
 type WorkerConfig struct {
 	Command          string        // Executable name or path (default: "opencode")
@@ -274,6 +277,65 @@ func (w *Worker) Alive() bool {
 	default:
 		return true
 	}
+}
+
+// ResetContext flushes the agent's working memory without killing the process.
+// It sends a session/cancel for the current session (if supported) and creates
+// a fresh ACP session via session/new. The same Cwd and system prompt are reused.
+// Returns the new ACP session ID on success.
+func (w *Worker) ResetContext(ctx context.Context, currentSessionID string) (string, error) {
+	// Check if worker is still alive
+	select {
+	case <-w.done:
+		return "", ErrWorkerClosed
+	default:
+	}
+
+	oldSessionID := currentSessionID
+
+	// Cancel the previous session if the agent advertises session/cancel capability
+	// Note: Currently ServerCaps doesn't have a SessionCancel field, so we attempt
+	// cancel and ignore errors (best effort)
+	if oldSessionID != "" {
+		cancelParams := SessionCancelParams{
+			SessionID: oldSessionID,
+		}
+		cancelReq, err := NewRequest(MethodSessionCancel, cancelParams)
+		if err == nil {
+			// Send cancel request but don't block on response
+			// Some agents may not support cancel, so we proceed regardless
+			_, _ = w.SendRequest(ctx, cancelReq)
+		}
+	}
+
+	// Create a new session
+	newParams := SessionNewParams{}
+	newReq, err := NewRequest(MethodSessionNew, newParams)
+	if err != nil {
+		return "", fmt.Errorf("acp: create session/new request: %w", err)
+	}
+
+	resp, err := w.SendRequest(ctx, newReq)
+	if err != nil {
+		return "", fmt.Errorf("acp: session/new request: %w", err)
+	}
+
+	if resp.Error != nil {
+		return "", fmt.Errorf("acp: session/new failed: %w", resp.Error)
+	}
+
+	var result SessionNewResult
+	if err := resp.ParseResult(&result); err != nil {
+		return "", fmt.Errorf("acp: parse session/new result: %w", err)
+	}
+
+	slog.Debug("acp: context reset",
+		"session_id", result.SessionID,
+		"old_acp", oldSessionID,
+		"new_acp", result.SessionID,
+	)
+
+	return result.SessionID, nil
 }
 
 // initialize performs the JSON-RPC initialize handshake.

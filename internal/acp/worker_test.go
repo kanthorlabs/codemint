@@ -324,3 +324,141 @@ echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"moc
 		t.Errorf("Send to stopped worker: error = %v; want ErrWorkerExited", err)
 	}
 }
+
+func TestWorker_ResetContext(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "mock_acp.sh")
+
+	// Mock script that handles initialize, session/new, and session/cancel
+	mockScript := `#!/bin/bash
+while IFS= read -r line; do
+    method=$(echo "$line" | grep -o '"method":"[^"]*"' | cut -d'"' -f4)
+    id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
+    
+    if [ "$method" = "initialize" ]; then
+        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{\"streaming\":true}}}"
+    elif [ "$method" = "session/new" ]; then
+        # Return a new session ID
+        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"sessionId\":\"new-session-$(date +%s%N)\"}}"
+    elif [ "$method" = "session/cancel" ]; then
+        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"
+    fi
+done
+`
+	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cfg := WorkerConfig{
+		Command:          "/bin/bash",
+		Args:             []string{script},
+		Cwd:              dir,
+		HandshakeTimeout: 2 * time.Second,
+	}
+
+	worker, err := Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer worker.Stop()
+
+	// Test ResetContext with an old session ID
+	oldSessionID := "old-session-123"
+	newSessionID, err := worker.ResetContext(ctx, oldSessionID)
+	if err != nil {
+		t.Fatalf("ResetContext: %v", err)
+	}
+
+	if newSessionID == "" {
+		t.Error("ResetContext returned empty session ID")
+	}
+
+	if newSessionID == oldSessionID {
+		t.Errorf("new session ID should be different from old: got %s", newSessionID)
+	}
+}
+
+func TestWorker_ResetContext_EmptyOldSession(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "mock_acp.sh")
+
+	mockScript := `#!/bin/bash
+while IFS= read -r line; do
+    method=$(echo "$line" | grep -o '"method":"[^"]*"' | cut -d'"' -f4)
+    id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
+    
+    if [ "$method" = "initialize" ]; then
+        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
+    elif [ "$method" = "session/new" ]; then
+        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"sessionId\":\"fresh-session-456\"}}"
+    fi
+done
+`
+	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cfg := WorkerConfig{
+		Command:          "/bin/bash",
+		Args:             []string{script},
+		HandshakeTimeout: 2 * time.Second,
+	}
+
+	worker, err := Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer worker.Stop()
+
+	// Test ResetContext with empty old session (no cancel should be sent)
+	newSessionID, err := worker.ResetContext(ctx, "")
+	if err != nil {
+		t.Fatalf("ResetContext: %v", err)
+	}
+
+	if newSessionID != "fresh-session-456" {
+		t.Errorf("ResetContext session ID = %q; want %q", newSessionID, "fresh-session-456")
+	}
+}
+
+func TestWorker_ResetContext_ClosedWorker(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "mock_acp.sh")
+
+	mockScript := `#!/bin/bash
+read line
+id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
+echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
+# Exit immediately after init
+`
+	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+
+	ctx := context.Background()
+	cfg := WorkerConfig{
+		Command:          "/bin/bash",
+		Args:             []string{script},
+		HandshakeTimeout: 2 * time.Second,
+	}
+
+	worker, err := Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	// Wait for worker to exit
+	<-worker.Done()
+
+	// Try to reset context
+	_, err = worker.ResetContext(ctx, "old-session")
+	if err != ErrWorkerClosed {
+		t.Errorf("ResetContext on closed worker: error = %v; want ErrWorkerClosed", err)
+	}
+}
