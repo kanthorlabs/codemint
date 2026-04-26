@@ -4,6 +4,8 @@ package ui
 import (
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 
 	"codemint.kanthorlabs.com/internal/registry"
 )
@@ -20,7 +22,15 @@ type AdapterConfig struct {
 }
 
 // AdapterSet holds the adapters created for a given client mode.
-// Only one of TUI or CUI will be non-nil based on the mode.
+//
+// In CLI mode, only TUI is non-nil.
+// In Daemon mode, only CUI is non-nil.
+// In Hybrid mode, BOTH TUI and CUI are non-nil.
+//
+// Hybrid mode ownership contract:
+//   - TUI owns stdin — it receives keyboard input from the local terminal.
+//   - CUI receives inbound messages via the Story 3.21 input multiplexer, NOT stdin.
+//   - Both adapters share the same mediator for output broadcasting.
 type AdapterSet struct {
 	TUI *TUIAdapter
 	CUI *CUIAdapter
@@ -30,6 +40,13 @@ type AdapterSet struct {
 //
 //   - ClientModeCLI: Creates only TUIAdapter for high-bandwidth terminal streaming.
 //   - ClientModeDaemon: Creates only CUIAdapter for low-bandwidth pulse notifications.
+//   - ClientModeHybrid: Creates BOTH TUI and CUI adapters for cross-interface testing.
+//
+// In hybrid mode:
+//   - TUI defaults to verbosity Level 0 (Task) — full streaming output.
+//   - CUI inherently filters to terminal-state events only.
+//   - Both adapters register against the same UIMediator.
+//   - Output broadcasts reach both adapters; deduplication is the mediator's job.
 //
 // This centralizes the "which adapters do we register?" decision that was
 // previously scattered across main.go.
@@ -49,6 +66,26 @@ func BuildAdapters(mode registry.ClientMode, cfg AdapterConfig) (AdapterSet, err
 		set.CUI = NewCUIAdapter(CUIAdapterConfig{
 			// CUIAdapter manages its own log file internally.
 			// The LogPath in AdapterConfig is available for future customization.
+		})
+
+	case registry.ClientModeHybrid:
+		// Hybrid mode: Both TUI and CUI adapters for cross-interface testing.
+		// TUI owns stdin; CUI receives inbound via Story 3.21 multiplexer.
+		tuiVerbosity := VerbosityTask // Default Level 0
+		if v := os.Getenv("CODEMINT_TUI_VERBOSITY"); v != "" {
+			if parsed, err := strconv.Atoi(v); err == nil && parsed >= 0 && parsed <= 2 {
+				tuiVerbosity = VerbosityLevel(parsed)
+			}
+		}
+
+		set.TUI = NewTUIAdapter(TUIAdapterConfig{
+			Writer:          cfg.Writer,
+			Verbosity:       tuiVerbosity,
+			VerbosityGetter: cfg.VerbosityGetter,
+		})
+		set.CUI = NewCUIAdapter(CUIAdapterConfig{
+			// CUI uses its built-in event filtering (terminal states only).
+			// Verbosity concept is TUI-specific; CUI filters differently.
 		})
 
 	default:

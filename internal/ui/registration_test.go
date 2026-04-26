@@ -53,6 +53,50 @@ func TestBuildAdapters_Daemon(t *testing.T) {
 	set.Close()
 }
 
+// TestBuildAdapters_Hybrid verifies that hybrid mode creates both TUI and CUI adapters.
+func TestBuildAdapters_Hybrid(t *testing.T) {
+	cfg := AdapterConfig{
+		Writer:          &bytes.Buffer{},
+		VerbosityGetter: func() VerbosityLevel { return VerbosityTask },
+	}
+
+	set, err := BuildAdapters(registry.ClientModeHybrid, cfg)
+	if err != nil {
+		t.Fatalf("BuildAdapters(Hybrid) error = %v", err)
+	}
+
+	// Hybrid mode should have BOTH adapters.
+	if set.TUI == nil {
+		t.Error("BuildAdapters(Hybrid) TUI = nil, want non-nil")
+	}
+	if set.CUI == nil {
+		t.Error("BuildAdapters(Hybrid) CUI = nil, want non-nil")
+	}
+
+	// Clean up.
+	set.Close()
+}
+
+// TestBuildAdapters_Hybrid_VerbosityDefaults verifies default verbosity levels in hybrid mode.
+func TestBuildAdapters_Hybrid_VerbosityDefaults(t *testing.T) {
+	cfg := AdapterConfig{
+		Writer:          &bytes.Buffer{},
+		VerbosityGetter: nil, // No dynamic getter
+	}
+
+	set, err := BuildAdapters(registry.ClientModeHybrid, cfg)
+	if err != nil {
+		t.Fatalf("BuildAdapters(Hybrid) error = %v", err)
+	}
+	defer set.Close()
+
+	// TUI should default to Level 0 (Task).
+	if set.TUI.GetVerbosity() != VerbosityTask {
+		t.Errorf("TUI verbosity = %d, want %d (Task)", set.TUI.GetVerbosity(), VerbosityTask)
+	}
+	// CUI doesn't have verbosity concept - it filters by event type instead.
+}
+
 func TestBuildAdapters_InvalidMode(t *testing.T) {
 	cfg := AdapterConfig{}
 
@@ -96,6 +140,26 @@ func TestAdapterSet_RegisterAll_Daemon(t *testing.T) {
 
 	// Clean up CUI.
 	cuiSet.Close()
+}
+
+// TestAdapterSet_RegisterAll_Hybrid verifies that hybrid mode registers both adapters.
+func TestAdapterSet_RegisterAll_Hybrid(t *testing.T) {
+	mediator := NewUIMediator(&bytes.Buffer{})
+
+	// Test Hybrid mode registration - both adapters.
+	hybridSet := AdapterSet{
+		TUI: NewTUIAdapter(TUIAdapterConfig{Writer: &bytes.Buffer{}}),
+		CUI: NewCUIAdapter(CUIAdapterConfig{}),
+	}
+	hybridSet.RegisterAll(mediator)
+
+	adapters := mediator.Adapters()
+	if len(adapters) != 2 {
+		t.Errorf("RegisterAll(Hybrid) adapter count = %d, want 2", len(adapters))
+	}
+
+	// Clean up both adapters.
+	hybridSet.Close()
 }
 
 func TestAdapterSet_Close(t *testing.T) {

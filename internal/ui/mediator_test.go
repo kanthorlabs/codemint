@@ -730,3 +730,98 @@ func TestTUIAdapter_CancelPrompt_RemovesPending(t *testing.T) {
 		t.Errorf("expected cancel message in output; got %q", output)
 	}
 }
+
+// --- Task 3.20.3: Hybrid Mode Deduplication Tests ---
+
+// TestMediator_Hybrid_NoDuplicateDelivery verifies that in hybrid mode,
+// each adapter receives exactly one copy of each event (no duplicates).
+func TestMediator_Hybrid_NoDuplicateDelivery(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewUIMediator(&buf)
+
+	// Simulate hybrid mode: both TUI and CUI adapters registered.
+	tui := &FastMockAdapter{response: registry.PromptResponse{SelectedOption: "Accept"}}
+	cui := &FastMockAdapter{response: registry.PromptResponse{SelectedOption: "Approve"}}
+
+	m.RegisterAdapter(tui)
+	m.RegisterAdapter(cui)
+
+	// Verify both adapters are registered.
+	if len(m.Adapters()) != 2 {
+		t.Fatalf("expected 2 adapters, got %d", len(m.Adapters()))
+	}
+
+	// Send a single event.
+	event := registry.UIEvent{
+		Type:    registry.EventTaskCompleted,
+		TaskID:  "task-hybrid-test",
+		Message: "Hybrid mode test",
+	}
+
+	m.NotifyAll(event)
+
+	// Give goroutines time to process.
+	time.Sleep(30 * time.Millisecond)
+
+	// Each adapter should receive exactly one event.
+	tuiEvents := tui.Events()
+	if len(tuiEvents) != 1 {
+		t.Errorf("TUI adapter: expected 1 event, got %d", len(tuiEvents))
+	}
+
+	cuiEvents := cui.Events()
+	if len(cuiEvents) != 1 {
+		t.Errorf("CUI adapter: expected 1 event, got %d", len(cuiEvents))
+	}
+
+	// Verify event content is correct.
+	if len(tuiEvents) > 0 && tuiEvents[0].TaskID != "task-hybrid-test" {
+		t.Errorf("TUI adapter received wrong event: %v", tuiEvents[0])
+	}
+	if len(cuiEvents) > 0 && cuiEvents[0].TaskID != "task-hybrid-test" {
+		t.Errorf("CUI adapter received wrong event: %v", cuiEvents[0])
+	}
+}
+
+// TestMediator_Hybrid_PromptDecision_FirstWins verifies that in hybrid mode,
+// the first adapter to respond wins and others are canceled.
+func TestMediator_Hybrid_PromptDecision_FirstWins(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewUIMediator(&buf)
+
+	// Simulate hybrid mode: TUI responds fast, CUI responds slow.
+	tui := &FastMockAdapter{response: registry.PromptResponse{SelectedOption: "TUI_Response"}}
+	cui := &SlowMockAdapter{response: registry.PromptResponse{SelectedOption: "CUI_Response"}}
+
+	m.RegisterAdapter(tui)
+	m.RegisterAdapter(cui)
+
+	req := registry.PromptRequest{
+		TaskID:  "task-hybrid-prompt",
+		Message: "Approve this change?",
+		Options: []string{"TUI_Response", "CUI_Response"},
+	}
+
+	resp := m.PromptDecision(context.Background(), req)
+
+	// TUI (fast) should win.
+	if resp.SelectedOption != "TUI_Response" {
+		t.Errorf("expected TUI_Response, got %q", resp.SelectedOption)
+	}
+	if resp.Error != nil {
+		t.Errorf("unexpected error: %v", resp.Error)
+	}
+
+	// Give time for CancelPrompt to be called.
+	time.Sleep(30 * time.Millisecond)
+
+	// CUI (slow/loser) should have received CancelPrompt.
+	if cui.CanceledPromptID() != "task-hybrid-prompt" {
+		t.Errorf("CUI adapter should have received CancelPrompt; got %q", cui.CanceledPromptID())
+	}
+
+	// TUI (winner) should NOT have received CancelPrompt.
+	if tui.CanceledPromptID() != "" {
+		t.Errorf("TUI adapter (winner) should not receive CancelPrompt; got %q", tui.CanceledPromptID())
+	}
+}

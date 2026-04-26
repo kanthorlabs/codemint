@@ -34,6 +34,7 @@ func TestValidModeFlags(t *testing.T) {
 	}{
 		{"cli", registry.ClientModeCLI},
 		{"daemon", registry.ClientModeDaemon},
+		{"hybrid", registry.ClientModeHybrid},
 	}
 
 	for _, tt := range tests {

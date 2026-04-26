@@ -39,6 +39,11 @@ const (
 	// Commands that perform terminal-only actions (e.g. /exit, /clear) must
 	// not be executed in this mode.
 	ClientModeDaemon ClientMode = "daemon"
+	// ClientModeHybrid runs both TUI and CUI adapters against the same mediator.
+	// This is primarily a testing/development affordance for cross-interface
+	// smoke tests: ask a question on the terminal, see the same conversation
+	// on Telegram (or other CUI backend), and reply from either side.
+	ClientModeHybrid ClientMode = "hybrid"
 )
 
 // SystemAction defines a lifecycle intent that a command can request from the
@@ -125,9 +130,17 @@ type Command struct {
 
 // SupportsMode reports whether c is allowed to run in mode. A command with no
 // declared SupportedModes is treated as universally available.
+//
+// For ClientModeHybrid, the command is available if it supports EITHER
+// ClientModeCLI OR ClientModeDaemon, since hybrid mode runs both adapters.
 func (c Command) SupportsMode(mode ClientMode) bool {
 	if len(c.SupportedModes) == 0 {
 		return true
+	}
+	// Hybrid mode inherits availability from CLI or Daemon modes.
+	if mode == ClientModeHybrid {
+		return slices.Contains(c.SupportedModes, ClientModeCLI) ||
+			slices.Contains(c.SupportedModes, ClientModeDaemon)
 	}
 	return slices.Contains(c.SupportedModes, mode)
 }

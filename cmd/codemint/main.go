@@ -391,7 +391,7 @@ func parseFlags() config {
 	flag.StringVar(&cfg.configPath, "c", defaultConfig, "Path to configuration file (shorthand)")
 
 	flag.StringVar(&cfg.dbPath, "db", "", "Override database path (default: "+xdg.DatabasePath()+")")
-	flag.StringVar(&cfg.mode, "mode", "cli", "Client mode: cli or daemon")
+	flag.StringVar(&cfg.mode, "mode", "cli", "Client mode: cli, daemon, or hybrid (cli + daemon adapters together)")
 	flag.BoolVar(&cfg.withAssistant, "with-assistant", true, "Enable System Assistant for freeform text queries")
 
 	flag.Usage = func() {
@@ -412,8 +412,10 @@ func parseClientMode(mode string) (registry.ClientMode, error) {
 		return registry.ClientModeCLI, nil
 	case "daemon":
 		return registry.ClientModeDaemon, nil
+	case "hybrid":
+		return registry.ClientModeHybrid, nil
 	default:
-		return "", fmt.Errorf("invalid mode %q: must be 'cli' or 'daemon'", mode)
+		return "", fmt.Errorf("invalid mode %q: must be 'cli', 'daemon', or 'hybrid'", mode)
 	}
 }
 
