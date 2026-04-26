@@ -1,4 +1,3 @@
-// Package repository defines the data access interfaces for CodeMint domain entities.
 package repository
 
 import (
