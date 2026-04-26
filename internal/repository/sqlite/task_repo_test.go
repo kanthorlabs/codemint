@@ -97,6 +97,191 @@ func TestNext_HierarchicalOrdering(t *testing.T) {
 	}
 }
 
+// TestNext_HierarchicalOrdering_AcrossEpics asserts that tasks are ordered
+// by seq_epic first, then seq_story, then seq_task. A task with lower seq_epic
+// should be returned before one with higher seq_epic, regardless of other values.
+func TestNext_HierarchicalOrdering_AcrossEpics(t *testing.T) {
+	repo, projectID, sessionID, agentID := setupTaskFixtures(t)
+	ctx := context.Background()
+
+	// Insert tasks spanning multiple epics in reverse order.
+	tasks := []*domain.Task{
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 3, SeqStory: 1, SeqTask: 1,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending,
+		},
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 2, SeqStory: 5, SeqTask: 10,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending,
+		},
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 99, SeqTask: 99,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending,
+		},
+	}
+
+	// Insert in reverse order (epic 3, 2, 1).
+	for _, task := range tasks {
+		insertRawTask(t, repo, task)
+	}
+
+	// Should return epic 1 first despite having highest story/task numbers.
+	next, err := repo.Next(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if next == nil {
+		t.Fatal("Next returned nil, expected a task")
+	}
+	// tasks[2] is the one with SeqEpic=1.
+	if next.ID != tasks[2].ID {
+		t.Errorf("Next returned epic=%d; want epic=1 (task %q)",
+			next.SeqEpic, tasks[2].ID)
+	}
+}
+
+// TestNext_HierarchicalOrdering_AcrossStories asserts that within the same
+// epic, tasks are ordered by seq_story, then seq_task.
+func TestNext_HierarchicalOrdering_AcrossStories(t *testing.T) {
+	repo, projectID, sessionID, agentID := setupTaskFixtures(t)
+	ctx := context.Background()
+
+	tasks := []*domain.Task{
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 3, SeqTask: 1,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending,
+		},
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 2, SeqTask: 5,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending,
+		},
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 10,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending,
+		},
+	}
+
+	for _, task := range tasks {
+		insertRawTask(t, repo, task)
+	}
+
+	next, err := repo.Next(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if next == nil {
+		t.Fatal("Next returned nil, expected a task")
+	}
+	// tasks[2] has SeqEpic=1, SeqStory=1 (lowest story in epic 1).
+	if next.ID != tasks[2].ID {
+		t.Errorf("Next returned story=%d; want story=1 (task %q)",
+			next.SeqStory, tasks[2].ID)
+	}
+}
+
+// TestNext_HierarchicalOrdering_FullTraversal asserts that repeated calls to
+// Next+Claim process tasks in strict (seq_epic, seq_story, seq_task) order.
+func TestNext_HierarchicalOrdering_FullTraversal(t *testing.T) {
+	repo, projectID, sessionID, agentID := setupTaskFixtures(t)
+	ctx := context.Background()
+
+	// Insert tasks in random order; expected traversal order is by sequence tuple.
+	tasks := []*domain.Task{
+		{ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID, AssigneeID: agentID, SeqEpic: 2, SeqStory: 1, SeqTask: 1, Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending},
+		{ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID, AssigneeID: agentID, SeqEpic: 1, SeqStory: 2, SeqTask: 1, Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending},
+		{ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID, AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 2, Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending},
+		{ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID, AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 1, Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending},
+		{ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID, AssigneeID: agentID, SeqEpic: 1, SeqStory: 2, SeqTask: 2, Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending},
+	}
+
+	for _, task := range tasks {
+		insertRawTask(t, repo, task)
+	}
+
+	// Expected order: (1,1,1), (1,1,2), (1,2,1), (1,2,2), (2,1,1)
+	expectedOrder := []struct{ epic, story, task int }{
+		{1, 1, 1},
+		{1, 1, 2},
+		{1, 2, 1},
+		{1, 2, 2},
+		{2, 1, 1},
+	}
+
+	for i, exp := range expectedOrder {
+		next, err := repo.Next(ctx, sessionID)
+		if err != nil {
+			t.Fatalf("iteration %d: Next returned error: %v", i, err)
+		}
+		if next == nil {
+			t.Fatalf("iteration %d: Next returned nil, expected task", i)
+		}
+		if next.SeqEpic != exp.epic || next.SeqStory != exp.story || next.SeqTask != exp.task {
+			t.Errorf("iteration %d: got (%d,%d,%d); want (%d,%d,%d)",
+				i, next.SeqEpic, next.SeqStory, next.SeqTask,
+				exp.epic, exp.story, exp.task)
+		}
+		// Claim the task to remove it from the actionable set.
+		if err := repo.Claim(ctx, next.ID); err != nil {
+			t.Fatalf("iteration %d: Claim failed: %v", i, err)
+		}
+	}
+
+	// After processing all tasks, Next should return nil.
+	final, err := repo.Next(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("final Next returned error: %v", err)
+	}
+	if final != nil {
+		t.Errorf("expected nil after all tasks claimed, got task %q", final.ID)
+	}
+}
+
+// TestNext_HierarchicalOrdering_IncludesAwaitingTasks asserts that Awaiting
+// tasks are included in the actionable set and ordered correctly.
+func TestNext_HierarchicalOrdering_IncludesAwaitingTasks(t *testing.T) {
+	repo, projectID, sessionID, agentID := setupTaskFixtures(t)
+	ctx := context.Background()
+
+	tasks := []*domain.Task{
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 2,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending,
+		},
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 1,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusAwaiting,
+		},
+	}
+
+	for _, task := range tasks {
+		insertRawTask(t, repo, task)
+	}
+
+	next, err := repo.Next(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if next == nil {
+		t.Fatal("Next returned nil, expected a task")
+	}
+	// tasks[1] has lower seq_task and is Awaiting (still actionable).
+	if next.ID != tasks[1].ID {
+		t.Errorf("Next returned task %q (seq_task=%d, status=%d); want Awaiting task %q",
+			next.ID, next.SeqTask, next.Status, tasks[1].ID)
+	}
+	if next.Status != domain.TaskStatusAwaiting {
+		t.Errorf("expected Awaiting status, got %d", next.Status)
+	}
+}
+
 // TestNext_ReturnsNilWhenEmpty asserts that Next returns nil when no
 // actionable tasks exist.
 func TestNext_ReturnsNilWhenEmpty(t *testing.T) {
