@@ -274,6 +274,26 @@ func run() error {
 		go heartbeat.Start(ctx)
 	}
 
+	// Step 12b: Start scheduler goroutine if we have an active session and project.
+	// The scheduler continuously pulls pending tasks and dispatches them to the ACP worker.
+	// It will exit when the context is cancelled (SIGINT/SIGTERM).
+	var scheduler *orchestrator.Scheduler
+	if activeSession.Session != nil && activeSession.Project != nil {
+		scheduler = orchestrator.NewSchedulerWithConfig(orchestrator.SchedulerConfig{
+			TaskRepo:      taskRepo,
+			Executor:      orchestrator.NewExecutor(nil, taskRepo, agentRepo, mediator),
+			ACPRegistry:   acpRegistry,
+			ACPRuntime:    acpRuntime,
+			ActiveSession: activeSession,
+			AdvanceCh:     nil, // Will be wired from Runtime.advanceCh in a future story
+		})
+		go func() {
+			if err := scheduler.Run(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("Warning: scheduler exited with error: %v", err)
+			}
+		}()
+	}
+
 	// Step 13: Create dispatcher wrapper for REPL loop.
 	wrapper := &dispatcherWrapper{
 		dispatcher: dispatcher,

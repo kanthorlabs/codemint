@@ -54,6 +54,11 @@ type ActiveSession struct {
 	// projectSwitchCallbacks are invoked when the project changes.
 	projectSwitchCallbacks []ProjectSwitchCallback
 	projectSwitchMu        sync.RWMutex
+
+	// wakeupCh signals the scheduler loop to check for new tasks.
+	// Capacity of 1 allows coalescing multiple Wakeup() calls into one signal.
+	wakeupCh   chan struct{}
+	wakeupOnce sync.Once
 }
 
 // GetClientMode satisfies registry.ActiveSessionInfo.
@@ -183,6 +188,38 @@ func (a *ActiveSession) fireProjectSwitchCallbacks(project *domain.Project) {
 
 	for _, cb := range callbacks {
 		cb(project)
+	}
+}
+
+// initWakeupCh initializes the wakeup channel if it hasn't been created yet.
+// Uses sync.Once to ensure thread-safe single initialization.
+func (a *ActiveSession) initWakeupCh() {
+	a.wakeupOnce.Do(func() {
+		a.wakeupCh = make(chan struct{}, 1)
+	})
+}
+
+// WakeupCh returns a channel that signals when new tasks may be available.
+// The scheduler should select on this channel alongside a fallback ticker.
+// The channel has capacity 1, so multiple Wakeup() calls coalesce into one signal.
+func (a *ActiveSession) WakeupCh() <-chan struct{} {
+	a.initWakeupCh()
+	return a.wakeupCh
+}
+
+// Wakeup signals the scheduler to check for new tasks.
+// Multiple calls before the scheduler reads the channel coalesce into a single signal.
+// This should be called from:
+//   - Phase 5 Activation (Story 2.7) when newly generated tasks are committed
+//   - /approve, /deny, /yolo commands when they resolve an awaiting task
+//   - Mid-flight pivots (Story 2.8) that update pending tasks
+func (a *ActiveSession) Wakeup() {
+	a.initWakeupCh()
+	// Non-blocking send: if the channel already has a signal, skip.
+	// This coalesces multiple wakeups into one.
+	select {
+	case a.wakeupCh <- struct{}{}:
+	default:
 	}
 }
 

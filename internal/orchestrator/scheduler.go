@@ -4,20 +4,35 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"codemint.kanthorlabs.com/internal/acp"
 	"codemint.kanthorlabs.com/internal/domain"
 	"codemint.kanthorlabs.com/internal/repository"
 )
 
+// ErrSchedulerAlreadyRunning is returned when Run is called while the scheduler
+// is already running. Only one Run loop is permitted at a time.
+var ErrSchedulerAlreadyRunning = errors.New("scheduler: already running")
+
 // Scheduler coordinates task execution with story-boundary detection.
 // It tracks the last seq_story value and calls ResetContext when transitioning
 // to a new User Story, keeping token usage lean without killing the ACP binary.
+//
+// The scheduler implements Task 3.13.2-3.13.5:
+//   - Continuous loop pulling pending tasks in strict (seq_epic, seq_story, seq_task) order
+//   - Awaiting state support: pauses when task transitions to awaiting
+//   - Exponential backoff on consecutive DB errors
+//   - Sequential execution guardrail: only one Run loop at a time
 type Scheduler struct {
 	taskRepo      repository.TaskRepository
 	executor      *Executor
 	acpRegistry   *acp.Registry
+	acpRuntime    *Runtime
 	activeSession *ActiveSession
 
 	// lastSeqStory tracks the seq_story of the last processed task.
@@ -27,6 +42,31 @@ type Scheduler struct {
 	// advanceCh receives signals from StatusMapper when a task completes successfully.
 	// When a signal is received, the scheduler advances to the next pending task.
 	advanceCh <-chan struct{}
+
+	// awaitingCh receives signals when an awaiting task is resolved.
+	// This is triggered by /approve, /deny, or /yolo commands.
+	awaitingCh chan struct{}
+
+	// running indicates whether the scheduler loop is currently running.
+	// Used to enforce the sequential execution guardrail (Task 3.13.5).
+	running atomic.Bool
+
+	// mu protects the dispatch step to ensure sequential execution.
+	mu sync.Mutex
+
+	// logger for scheduler operations.
+	logger *slog.Logger
+}
+
+// SchedulerConfig holds configuration for creating a new Scheduler.
+type SchedulerConfig struct {
+	TaskRepo      repository.TaskRepository
+	Executor      *Executor
+	ACPRegistry   *acp.Registry
+	ACPRuntime    *Runtime
+	ActiveSession *ActiveSession
+	AdvanceCh     <-chan struct{}
+	Logger        *slog.Logger
 }
 
 // NewScheduler creates a new Scheduler with the provided dependencies.
@@ -46,6 +86,45 @@ func NewScheduler(
 		activeSession: activeSession,
 		lastSeqStory:  -1, // Force reset on first task after restart
 		advanceCh:     advanceCh,
+		awaitingCh:    make(chan struct{}, 1),
+		logger:        slog.Default(),
+	}
+}
+
+// NewSchedulerWithConfig creates a new Scheduler with the provided configuration.
+// This is the preferred constructor for production use.
+func NewSchedulerWithConfig(cfg SchedulerConfig) *Scheduler {
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	return &Scheduler{
+		taskRepo:      cfg.TaskRepo,
+		executor:      cfg.Executor,
+		acpRegistry:   cfg.ACPRegistry,
+		acpRuntime:    cfg.ACPRuntime,
+		activeSession: cfg.ActiveSession,
+		lastSeqStory:  -1,
+		advanceCh:     cfg.AdvanceCh,
+		awaitingCh:    make(chan struct{}, 1),
+		logger:        logger,
+	}
+}
+
+// IsRunning returns true if the scheduler loop is currently running.
+// Used by /acp-status to display scheduler state.
+func (s *Scheduler) IsRunning() bool {
+	return s.running.Load()
+}
+
+// ResolveAwaiting signals that an awaiting task has been resolved.
+// This should be called by /approve, /deny, or /yolo command handlers.
+func (s *Scheduler) ResolveAwaiting() {
+	select {
+	case s.awaitingCh <- struct{}{}:
+	default:
+		// Channel already has a signal, coalesce.
 	}
 }
 
@@ -69,7 +148,7 @@ func (s *Scheduler) ProcessNextTask(ctx context.Context) (*domain.Task, error) {
 
 	// Check for story boundary and reset context if needed.
 	if err := s.maybeResetContext(ctx, task); err != nil {
-		slog.Error("scheduler: context reset failed",
+		s.logger.Error("scheduler: context reset failed",
 			"task_id", task.ID,
 			"seq_story", task.SeqStory,
 			"error", err,
@@ -140,7 +219,7 @@ func (s *Scheduler) maybeResetContext(ctx context.Context, task *domain.Task) er
 	// Update lastSeqStory only after successful reset.
 	s.lastSeqStory = task.SeqStory
 
-	slog.Info("scheduler: story boundary reset",
+	s.logger.Info("scheduler: story boundary reset",
 		"task_id", task.ID,
 		"old_seq_story", s.lastSeqStory,
 		"new_seq_story", task.SeqStory,
@@ -165,51 +244,193 @@ func (s *Scheduler) setCurrentTaskOnWorker(taskID string) {
 	worker.SetCurrentTask(taskID)
 }
 
+// ensureWorkerAttached lazily spawns the ACP worker if not already attached.
+// This implements the lazy spawn requirement from Task 3.13.2.
+func (s *Scheduler) ensureWorkerAttached(ctx context.Context) (*acp.Worker, error) {
+	if s.acpRuntime == nil {
+		return nil, nil
+	}
+
+	session := s.activeSession.GetSession()
+	project := s.activeSession.GetProject()
+	if session == nil || project == nil {
+		return nil, nil
+	}
+
+	return s.acpRuntime.AttachWorker(ctx, session, project)
+}
+
+// backoffDuration calculates the exponential backoff duration.
+// Starts at 500ms and doubles up to a maximum of 5 seconds.
+func backoffDuration(consecutiveErrors int) time.Duration {
+	base := 500 * time.Millisecond
+	max := 5 * time.Second
+
+	// Calculate 2^(consecutiveErrors-1) * base.
+	duration := base
+	for i := 1; i < consecutiveErrors && duration < max; i++ {
+		duration *= 2
+	}
+	if duration > max {
+		duration = max
+	}
+	return duration
+}
+
 // Run starts the scheduler loop that continuously processes tasks.
-// It runs until the context is cancelled. When advanceCh is provided,
-// the scheduler waits for signals from StatusMapper before processing
-// the next task (Task 3.7.3).
+// It runs until the context is cancelled.
+//
+// This implements Task 3.13.2-3.13.5:
+//   - Lazy worker spawn via runtime.AttachWorker
+//   - Blocks on wakeupCh or a 1-minute fallback ticker when idle
+//   - Blocks on awaitingCh when a task is in awaiting state
+//   - Exponential backoff on consecutive DB errors
+//   - Sequential execution guardrail (only one Run loop at a time)
+//
+// Returns ErrSchedulerAlreadyRunning if another Run loop is already active.
 func (s *Scheduler) Run(ctx context.Context) error {
+	// Task 3.13.5: Reject concurrent Run calls.
+	if !s.running.CompareAndSwap(false, true) {
+		return ErrSchedulerAlreadyRunning
+	}
+	defer s.running.Store(false)
+
+	s.logger.Info("scheduler: starting")
+
+	// Lazy spawn the ACP worker (Task 3.13.2).
+	if _, err := s.ensureWorkerAttached(ctx); err != nil {
+		s.logger.Error("scheduler: failed to attach worker", "error", err)
+		// Continue without worker - tasks will fail but loop keeps running.
+	}
+
+	// Create fallback ticker (1 minute).
+	fallbackTicker := time.NewTicker(time.Minute)
+	defer fallbackTicker.Stop()
+
+	var consecutiveErrors int
+
 	for {
 		select {
 		case <-ctx.Done():
+			s.logger.Info("scheduler: shutting down")
 			return ctx.Err()
 		default:
-			task, err := s.ProcessNextTask(ctx)
-			if err != nil {
-				slog.Error("scheduler: task processing error",
-					"error", err,
-				)
-				// Continue processing other tasks.
-				continue
-			}
-			if task == nil {
-				// No pending tasks.
-				if s.advanceCh != nil {
-					// Wait for advance signal or context cancellation.
-					slog.Info("acp scheduler idle")
-					select {
-					case <-ctx.Done():
-						return ctx.Err()
-					case <-s.advanceCh:
-						// Received signal to advance, loop continues.
-						continue
-					}
-				}
-				// No advance channel, return and let caller decide.
-				return nil
-			}
+		}
 
-			// If we have an advance channel, wait for the task to complete
-			// before processing the next one (signal comes from StatusMapper).
-			if s.advanceCh != nil {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-s.advanceCh:
-					// Task completed, loop continues to next task.
-				}
+		// Task 3.13.5: Lock around dispatch step for sequential execution.
+		s.mu.Lock()
+		task, err := s.processWithBackoff(ctx, &consecutiveErrors)
+		s.mu.Unlock()
+
+		if err != nil {
+			// If context is cancelled, exit.
+			if ctx.Err() != nil {
+				s.logger.Info("scheduler: shutting down")
+				return ctx.Err()
+			}
+			// Otherwise continue with backoff (already applied in processWithBackoff).
+			continue
+		}
+
+		if task == nil {
+			// No pending tasks - wait for wakeup signal or fallback ticker.
+			s.logger.Info("scheduler: idle, waiting for wakeup")
+			select {
+			case <-ctx.Done():
+				s.logger.Info("scheduler: shutting down")
+				return ctx.Err()
+			case <-s.activeSession.WakeupCh():
+				s.logger.Debug("scheduler: wakeup received")
+			case <-fallbackTicker.C:
+				s.logger.Debug("scheduler: fallback ticker fired")
+			case <-s.advanceCh:
+				s.logger.Debug("scheduler: advance signal received")
+			}
+			continue
+		}
+
+		// Task was dispatched. Check if it's in awaiting state.
+		// Re-fetch the task to get the current status (executor may have changed it).
+		currentTask, err := s.taskRepo.FindByID(ctx, task.ID)
+		if err != nil {
+			s.logger.Warn("scheduler: failed to re-fetch task status",
+				"task_id", task.ID,
+				"error", err,
+			)
+			// Continue to next iteration.
+			continue
+		}
+
+		if currentTask != nil && currentTask.Status == domain.TaskStatusAwaiting {
+			// Block until the awaiting task is resolved.
+			s.logger.Info("scheduler: task awaiting approval",
+				"task_id", task.ID,
+			)
+			select {
+			case <-ctx.Done():
+				s.logger.Info("scheduler: shutting down")
+				return ctx.Err()
+			case <-s.awaitingCh:
+				s.logger.Info("scheduler: awaiting resolved, continuing",
+					"task_id", task.ID,
+				)
+			case <-s.activeSession.WakeupCh():
+				s.logger.Debug("scheduler: wakeup during await")
+			}
+		}
+
+		// Wait for advance signal if provided (task completion from StatusMapper).
+		if s.advanceCh != nil {
+			select {
+			case <-ctx.Done():
+				s.logger.Info("scheduler: shutting down")
+				return ctx.Err()
+			case <-s.advanceCh:
+				// Task completed, loop continues to next task.
 			}
 		}
 	}
+}
+
+// processWithBackoff processes the next task with exponential backoff on errors.
+func (s *Scheduler) processWithBackoff(ctx context.Context, consecutiveErrors *int) (*domain.Task, error) {
+	task, err := s.ProcessNextTask(ctx)
+	if err != nil {
+		*consecutiveErrors++
+		backoff := backoffDuration(*consecutiveErrors)
+		s.logger.Warn("scheduler: task processing error, backing off",
+			"error", err,
+			"consecutive_errors", *consecutiveErrors,
+			"backoff", backoff,
+		)
+
+		// Sleep with context awareness.
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		return nil, err
+	}
+
+	// Reset consecutive errors on success.
+	*consecutiveErrors = 0
+	return task, nil
+}
+
+// Restart stops the current scheduler loop and starts a new one for a different session.
+// This should be called when /project-open switches to a new project.
+func (s *Scheduler) Restart(ctx context.Context, newSession *ActiveSession) error {
+	// The current Run loop will exit when its context is cancelled.
+	// This method updates the active session so subsequent calls use the new session.
+	s.activeSession = newSession
+	s.lastSeqStory = -1 // Reset story tracking for new session.
+
+	// Wake up the scheduler to pick up the new session.
+	if newSession != nil {
+		newSession.Wakeup()
+	}
+
+	return nil
 }

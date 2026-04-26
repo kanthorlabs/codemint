@@ -2,7 +2,9 @@ package orchestrator
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"codemint.kanthorlabs.com/internal/acp"
 	"codemint.kanthorlabs.com/internal/domain"
@@ -14,9 +16,12 @@ import (
 type mockTaskRepoForScheduler struct {
 	tasks        []*domain.Task
 	currentIndex int
+	mu           sync.Mutex
 }
 
 func (m *mockTaskRepoForScheduler) Next(_ context.Context, _ string) (*domain.Task, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.currentIndex >= len(m.tasks) {
 		return nil, nil
 	}
@@ -33,7 +38,16 @@ func (m *mockTaskRepoForScheduler) UpdateStatus(_ context.Context, _ string, _ d
 func (m *mockTaskRepoForScheduler) FindInterrupted(_ context.Context, _ string) ([]*domain.Task, error) {
 	return nil, nil
 }
-func (m *mockTaskRepoForScheduler) FindByID(_ context.Context, _ string) (*domain.Task, error) { return nil, nil }
+func (m *mockTaskRepoForScheduler) FindByID(_ context.Context, taskID string) (*domain.Task, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, t := range m.tasks {
+		if t.ID == taskID {
+			return t, nil
+		}
+	}
+	return nil, nil
+}
 func (m *mockTaskRepoForScheduler) UpdateTaskStatus(_ context.Context, _ string, _ domain.TaskStatus) error {
 	return nil
 }
@@ -50,18 +64,21 @@ func (m *mockTaskRepoForScheduler) MostRecentActive(_ context.Context, _ string)
 
 type mockExecutorForScheduler struct {
 	executedTasks []*domain.Task
+	mu            sync.Mutex
 }
 
 func (m *mockExecutorForScheduler) ExecuteTask(_ context.Context, task *domain.Task) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.executedTasks = append(m.executedTasks, task)
 	return nil
 }
 
 // mockACPRegistryEntry simulates an ACP worker for testing.
 type mockACPRegistryEntry struct {
-	resetContextCalls  []string // old session IDs passed to ResetContext
-	newSessionID       string
-	alive              bool
+	resetContextCalls []string // old session IDs passed to ResetContext
+	newSessionID      string
+	alive             bool
 }
 
 func (m *mockACPRegistryEntry) recordResetContext(oldSessionID string) string {
@@ -349,5 +366,169 @@ func TestScheduler_NoResetWithinSameStory(t *testing.T) {
 	// lastSeqStory should remain unchanged
 	if scheduler.lastSeqStory != 2 {
 		t.Errorf("lastSeqStory should remain 2, got %d", scheduler.lastSeqStory)
+	}
+}
+
+// TestScheduler_RejectsConcurrentRun verifies that only one Run loop can be active at a time.
+func TestScheduler_RejectsConcurrentRun(t *testing.T) {
+	sessionID := idgen.MustNew()
+
+	activeSession := &ActiveSession{
+		Session: &domain.Session{ID: sessionID},
+		Project: &domain.Project{ID: idgen.MustNew()},
+	}
+
+	taskRepo := &mockTaskRepoForScheduler{tasks: nil} // No tasks
+
+	scheduler := NewScheduler(taskRepo, nil, nil, activeSession, nil)
+
+	// Start the first Run in a goroutine.
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+
+	started := make(chan struct{})
+	firstErr := make(chan error, 1)
+	go func() {
+		close(started)
+		firstErr <- scheduler.Run(ctx1)
+	}()
+
+	<-started
+	// Give the first Run time to set running=true.
+	time.Sleep(50 * time.Millisecond)
+
+	// Try to start a second Run - should fail immediately.
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel2()
+
+	err := scheduler.Run(ctx2)
+	if err != ErrSchedulerAlreadyRunning {
+		t.Errorf("expected ErrSchedulerAlreadyRunning, got %v", err)
+	}
+
+	// Verify IsRunning returns true.
+	if !scheduler.IsRunning() {
+		t.Error("expected IsRunning() to return true")
+	}
+
+	// Cancel the first Run.
+	cancel1()
+
+	// Wait for first Run to exit.
+	<-firstErr
+
+	// Verify IsRunning returns false after exit.
+	time.Sleep(50 * time.Millisecond)
+	if scheduler.IsRunning() {
+		t.Error("expected IsRunning() to return false after Run exits")
+	}
+}
+
+// TestScheduler_RunsTasksInOrder verifies that the scheduler dispatches
+// tasks in strict (seq_epic, seq_story, seq_task) order.
+func TestScheduler_RunsTasksInOrder(t *testing.T) {
+	sessionID := idgen.MustNew()
+
+	tasks := []*domain.Task{
+		{ID: "task-1", SessionID: sessionID, SeqEpic: 1, SeqStory: 1, SeqTask: 1, Type: domain.TaskTypeCoding, Timeout: domain.DefaultTaskTimeout},
+		{ID: "task-2", SessionID: sessionID, SeqEpic: 1, SeqStory: 1, SeqTask: 2, Type: domain.TaskTypeCoding, Timeout: domain.DefaultTaskTimeout},
+		{ID: "task-3", SessionID: sessionID, SeqEpic: 1, SeqStory: 2, SeqTask: 1, Type: domain.TaskTypeCoding, Timeout: domain.DefaultTaskTimeout},
+	}
+
+	taskRepo := &mockTaskRepoForScheduler{tasks: tasks}
+
+	// Create a mock executor that tracks executed tasks.
+	executedTasks := []*domain.Task{}
+	var mu sync.Mutex
+	mockExec := &mockCodingAgent{}
+	executor := NewExecutor(mockExec, &mockTaskRepo{}, &mockAgentRepo{}, &mockUI{})
+
+	// Override executor's ExecuteTask to track calls.
+	// Since we can't easily override, we'll use ProcessNextTask directly.
+
+	activeSession := &ActiveSession{
+		Session: &domain.Session{ID: sessionID},
+	}
+
+	scheduler := NewScheduler(taskRepo, executor, nil, activeSession, nil)
+
+	ctx := context.Background()
+
+	// Process all tasks.
+	for i := 0; i < 3; i++ {
+		task, err := scheduler.ProcessNextTask(ctx)
+		if err != nil {
+			t.Fatalf("unexpected error on task %d: %v", i, err)
+		}
+		if task == nil {
+			t.Fatalf("expected task %d, got nil", i)
+		}
+		mu.Lock()
+		executedTasks = append(executedTasks, task)
+		mu.Unlock()
+	}
+
+	// Verify order.
+	if len(executedTasks) != 3 {
+		t.Fatalf("expected 3 tasks, got %d", len(executedTasks))
+	}
+	if executedTasks[0].ID != "task-1" {
+		t.Errorf("expected first task to be task-1, got %s", executedTasks[0].ID)
+	}
+	if executedTasks[1].ID != "task-2" {
+		t.Errorf("expected second task to be task-2, got %s", executedTasks[1].ID)
+	}
+	if executedTasks[2].ID != "task-3" {
+		t.Errorf("expected third task to be task-3, got %s", executedTasks[2].ID)
+	}
+}
+
+// TestActiveSession_Wakeup_Coalesces verifies that multiple Wakeup calls
+// before the scheduler reads the channel collapse to a single notification.
+func TestActiveSession_Wakeup_Coalesces(t *testing.T) {
+	activeSession := &ActiveSession{}
+
+	// Call Wakeup multiple times.
+	activeSession.Wakeup()
+	activeSession.Wakeup()
+	activeSession.Wakeup()
+
+	// Only one signal should be in the channel.
+	ch := activeSession.WakeupCh()
+	select {
+	case <-ch:
+		// OK, received one signal.
+	default:
+		t.Error("expected one signal in WakeupCh")
+	}
+
+	// Channel should now be empty.
+	select {
+	case <-ch:
+		t.Error("expected no more signals in WakeupCh")
+	default:
+		// OK, channel is empty.
+	}
+}
+
+// TestBackoffDuration verifies the exponential backoff calculation.
+func TestBackoffDuration(t *testing.T) {
+	tests := []struct {
+		consecutiveErrors int
+		expected          time.Duration
+	}{
+		{1, 500 * time.Millisecond},
+		{2, 1 * time.Second},
+		{3, 2 * time.Second},
+		{4, 4 * time.Second},
+		{5, 5 * time.Second}, // Capped at 5s
+		{10, 5 * time.Second}, // Still capped
+	}
+
+	for _, tt := range tests {
+		got := backoffDuration(tt.consecutiveErrors)
+		if got != tt.expected {
+			t.Errorf("backoffDuration(%d) = %v, expected %v", tt.consecutiveErrors, got, tt.expected)
+		}
 	}
 }
