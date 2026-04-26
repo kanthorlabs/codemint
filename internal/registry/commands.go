@@ -100,6 +100,20 @@ func (c Command) SupportsMode(mode ClientMode) bool {
 	return slices.Contains(c.SupportedModes, mode)
 }
 
+// PromptRequest contains the information needed to display a decision prompt
+// to the user across multiple UI adapters.
+type PromptRequest struct {
+	TaskID  string
+	Message string
+	Options []string // e.g., ["Accept", "Revert"]
+}
+
+// PromptResponse carries the user's selected option from a UI adapter.
+type PromptResponse struct {
+	SelectedOption string
+	Error          error
+}
+
 // UIMediator abstracts all user-facing output and system interactions so that
 // command handlers and the Dispatcher remain UI-agnostic. A TUI implementation
 // writes to stdout; a CUI implementation enqueues chat bubbles.
@@ -108,6 +122,10 @@ type UIMediator interface {
 	RenderMessage(msg string)
 	// ClearScreen resets the visible output area.
 	ClearScreen()
+	// PromptDecision broadcasts a decision prompt to all registered UI adapters
+	// concurrently. The first adapter to respond wins; other adapters receive
+	// context cancellation to dismiss their pending prompts.
+	PromptDecision(ctx context.Context, req PromptRequest) PromptResponse
 }
 
 // CommandRegistry is a concurrency-safe store of named Commands.

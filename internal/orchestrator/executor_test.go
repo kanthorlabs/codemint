@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"codemint.kanthorlabs.com/internal/domain"
+	"codemint.kanthorlabs.com/internal/registry"
 	"codemint.kanthorlabs.com/internal/util/idgen"
 )
 
@@ -67,6 +68,9 @@ type mockUI struct {
 
 func (m *mockUI) RenderMessage(msg string) { m.lastMessage = msg }
 func (m *mockUI) ClearScreen()             {}
+func (m *mockUI) PromptDecision(_ context.Context, _ registry.PromptRequest) registry.PromptResponse {
+	return registry.PromptResponse{}
+}
 
 // --- Tests ---
 

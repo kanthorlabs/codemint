@@ -13,8 +13,11 @@ import (
 // noopUI is a UIMediator that discards all output.
 type noopUI struct{}
 
-func (noopUI) RenderMessage(_ string) {}
-func (noopUI) ClearScreen()           {}
+func (noopUI) RenderMessage(_ string)                                           {}
+func (noopUI) ClearScreen()                                                     {}
+func (noopUI) PromptDecision(_ context.Context, _ registry.PromptRequest) registry.PromptResponse {
+	return registry.PromptResponse{}
+}
 
 // captureUI is a UIMediator that records rendered messages and clear calls.
 type captureUI struct {
@@ -24,6 +27,9 @@ type captureUI struct {
 
 func (c *captureUI) RenderMessage(msg string) { c.messages = append(c.messages, msg) }
 func (c *captureUI) ClearScreen()             { c.cleared++ }
+func (c *captureUI) PromptDecision(_ context.Context, _ registry.PromptRequest) registry.PromptResponse {
+	return registry.PromptResponse{}
+}
 
 // newTestRegistry returns a registry pre-loaded with a "mock" command whose
 // handler records the args it was called with.
