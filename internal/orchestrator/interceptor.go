@@ -213,6 +213,12 @@ func (i *Interceptor) evaluateCommand(ctx context.Context, command, cwd string) 
 	return matcher.Evaluate(command, cwd)
 }
 
+// EvaluateCommand is a public wrapper for evaluateCommand.
+// Used by the Executor for verification task permission checks.
+func (i *Interceptor) EvaluateCommand(ctx context.Context, command, cwd string) Decision {
+	return i.evaluateCommand(ctx, command, cwd)
+}
+
 // executeAndRespond runs an allowed command locally and injects the result.
 // This is used for tool_call events where we don't need to send a formal response.
 func (i *Interceptor) executeAndRespond(ctx context.Context, ev acp.Event, hctx HandleContext) {

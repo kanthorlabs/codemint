@@ -59,10 +59,11 @@ func (n *NullableJSON) UnmarshalJSON(data []byte) error {
 type TaskType int
 
 const (
-	TaskTypeCoding       TaskType = iota // 0
-	TaskTypeVerification                 // 1
-	TaskTypeConfirmation                 // 2
-	TaskTypeCoordination                 // 3
+	TaskTypeCoding        TaskType = iota // 0
+	TaskTypeVerification                  // 1
+	TaskTypeConfirmation                  // 2
+	TaskTypeCoordination                  // 3
+	TaskTypeRetrospective                 // 4
 )
 
 // TaskStatus represents the lifecycle state of a task.

@@ -169,6 +169,9 @@ const (
 	// EventTaskStatusChanged indicates a task status transition occurred.
 	// The payload contains TaskID, From, To, and Reason fields.
 	EventTaskStatusChanged UIEventType = "task_status_changed"
+	// EventReviseRequested indicates the user requested revisions to a task.
+	// The payload contains the task ID and optional revision details.
+	EventReviseRequested UIEventType = "revise_requested"
 )
 
 // UIEvent represents a fire-and-forget notification broadcast to all UI
