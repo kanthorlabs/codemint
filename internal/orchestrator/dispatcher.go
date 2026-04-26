@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
+	"codemint.kanthorlabs.com/internal/agent"
 	"codemint.kanthorlabs.com/internal/domain"
 	"codemint.kanthorlabs.com/internal/registry"
 	"codemint.kanthorlabs.com/internal/repl"
@@ -19,24 +21,28 @@ var ErrNoBrainstormer = errors.New("orchestrator: brainstormer not available (EP
 // backward compatibility. Prefer using registry.ErrShutdownGracefully directly.
 var ErrShutdownGracefully = registry.ErrShutdownGracefully
 
+// ErrSystemAssistantDisabled is returned when freeform input arrives but
+// the system assistant was not configured (e.g., --with-assistant=false).
+var ErrSystemAssistantDisabled = errors.New("orchestrator: system assistant disabled (run with --with-assistant)")
+
 // Dispatcher routes user input to slash-command handlers or the appropriate
 // AI assistant path depending on the current ActiveSession.
 type Dispatcher struct {
 	registry            *registry.CommandRegistry
 	ui                  registry.UIMediator
-	systemAssistant     func(ctx context.Context, input string) error
+	systemAssistant     agent.SystemAssistant
 	workflowRegistry    *workflow.WorkflowRegistry
 	interactionRecorder *InteractionRecorder
 }
 
 // NewDispatcher constructs a Dispatcher backed by the given registry and UI
-// mediator. systemAssistant may be nil during development; a placeholder error
-// is returned when natural-language global input arrives without one.
+// mediator. systemAssistant may be nil; a friendly error is returned when
+// natural-language global input arrives without one.
 // workflowRegistry may be nil; workflow routing will be skipped in that case.
 func NewDispatcher(
 	r *registry.CommandRegistry,
 	ui registry.UIMediator,
-	systemAssistant func(ctx context.Context, input string) error,
+	systemAssistant agent.SystemAssistant,
 	workflowRegistry *workflow.WorkflowRegistry,
 ) *Dispatcher {
 	return &Dispatcher{
@@ -116,10 +122,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, active *ActiveSession, input 
 
 	// Natural-language path.
 	if active.IsGlobal {
-		if d.systemAssistant == nil {
-			return fmt.Errorf("orchestrator: system assistant not configured")
-		}
-		return d.systemAssistant(ctx, rawArgs)
+		return d.dispatchToSystemAssistant(ctx, active, rawArgs)
 	}
 
 	// Project session: use workflow registry to route if available.
@@ -140,10 +143,95 @@ func (d *Dispatcher) Dispatch(ctx context.Context, active *ActiveSession, input 
 	return fmt.Errorf("%w: input=%q", ErrNoBrainstormer, rawArgs)
 }
 
+// dispatchToSystemAssistant routes freeform text to the system assistant.
+// It streams the response back to all registered adapters via the mediator.
+func (d *Dispatcher) dispatchToSystemAssistant(ctx context.Context, active *ActiveSession, text string) error {
+	if d.systemAssistant == nil {
+		if d.ui != nil {
+			d.ui.RenderMessage("System Assistant is not available. Run CodeMint with --with-assistant to enable it.")
+		}
+		return ErrSystemAssistantDisabled
+	}
+
+	// Build the assistant session from ActiveSession.
+	sess := agent.AssistantSession{
+		Session:  active.Session,
+		Project:  active.Project,
+		IsGlobal: active.IsGlobal,
+	}
+
+	// Call the assistant.
+	chunks, err := d.systemAssistant.Ask(ctx, sess, text)
+	if err != nil {
+		errMsg := fmt.Sprintf("System Assistant error: %v", err)
+		if d.ui != nil {
+			d.ui.RenderMessage(errMsg)
+		}
+		d.recordChat(ctx, active, text, errMsg, err)
+		return nil // Handled gracefully, not a failure to the caller
+	}
+
+	// Collect and broadcast the response.
+	var response strings.Builder
+	for chunk := range chunks {
+		if chunk.Err != nil {
+			errMsg := fmt.Sprintf("System Assistant error: %v", chunk.Err)
+			if d.ui != nil {
+				d.ui.RenderMessage(errMsg)
+			}
+			d.recordChat(ctx, active, text, response.String(), chunk.Err)
+			return nil
+		}
+
+		if chunk.Text != "" {
+			response.WriteString(chunk.Text)
+
+			// Broadcast the chunk to all adapters.
+			if d.ui != nil {
+				d.ui.NotifyAll(registry.UIEvent{
+					Type:    registry.EventChatChunk,
+					Message: chunk.Text,
+					Payload: registry.ChatChunkPayload{
+						Source: "system-assistant",
+						Text:   chunk.Text,
+						Final:  false,
+					},
+				})
+			}
+		}
+
+		if chunk.Done {
+			// Send final marker.
+			if d.ui != nil {
+				d.ui.NotifyAll(registry.UIEvent{
+					Type: registry.EventChatChunk,
+					Payload: registry.ChatChunkPayload{
+						Source: "system-assistant",
+						Final:  true,
+					},
+				})
+			}
+			break
+		}
+	}
+
+	// Record the conversation for /activity.
+	d.recordChat(ctx, active, text, response.String(), nil)
+
+	return nil
+}
+
 // recordInteraction records a user interaction as a Coordination task.
 func (d *Dispatcher) recordInteraction(ctx context.Context, active *ActiveSession, input string, isSlash bool, cmdName string, response string, err error) {
 	if d.interactionRecorder != nil {
 		d.interactionRecorder.Record(ctx, active, input, isSlash, cmdName, response, err)
+	}
+}
+
+// recordChat records a conversational exchange as a Coordination task.
+func (d *Dispatcher) recordChat(ctx context.Context, active *ActiveSession, userText string, assistantText string, err error) {
+	if d.interactionRecorder != nil {
+		d.interactionRecorder.RecordChat(ctx, active, userText, assistantText, string(active.ClientMode), err)
 	}
 }
 

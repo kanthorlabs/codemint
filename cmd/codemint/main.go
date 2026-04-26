@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"codemint.kanthorlabs.com/internal/acp"
+	"codemint.kanthorlabs.com/internal/agent"
 	appconfig "codemint.kanthorlabs.com/internal/config"
 	"codemint.kanthorlabs.com/internal/db"
 	"codemint.kanthorlabs.com/internal/domain"
@@ -36,11 +37,12 @@ var (
 
 // config holds the parsed command-line flags.
 type config struct {
-	showVersion bool
-	showHelp    bool
-	configPath  string
-	dbPath      string
-	mode        string
+	showVersion   bool
+	showHelp      bool
+	configPath    string
+	dbPath        string
+	mode          string
+	withAssistant bool
 }
 
 // dispatcherWrapper adapts orchestrator.Dispatcher to repl.Dispatcher interface.
@@ -149,8 +151,55 @@ func run() error {
 		log.Printf("Loaded %d workflow(s) from config", workflowReg.Len())
 	}
 
-	// Step 10: Create dispatcher (no system assistant yet - EPIC-02).
-	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil, workflowReg)
+	// Step 9b: Create ACP worker registry and Runtime early (needed for SystemAssistant).
+	// The registry is created lazily - workers are only spawned when needed.
+	// The Runtime wires together Pipeline, Interceptor, StatusMapper, Fanout, and BufferRegistry.
+	acpRegistry := acp.NewRegistry(acp.DefaultConfig())
+	permissionRepo := sqlite.NewProjectPermissionRepo(dbConn)
+	bufferRegistry := acp.NewBufferRegistry(acp.DefaultBufferCapacity)
+
+	acpRuntime, err := orchestrator.NewRuntime(ctx, orchestrator.RuntimeConfig{
+		Registry:       acpRegistry,
+		BufferRegistry: bufferRegistry,
+		Mediator:       mediator,
+		PermissionRepo: permissionRepo,
+		TaskRepo:       taskRepo,
+		SessionRepo:    sessionRepo,
+		AgentRepo:      agentRepo,
+	})
+	if err != nil {
+		log.Fatalf("Failed to create ACP runtime: %v", err)
+	}
+
+	// Step 9c: Create System Assistant if enabled (Story 3.19).
+	var systemAssistant agent.SystemAssistant
+	if cfg.withAssistant {
+		// Resolve the provider from config. Default to "opencode".
+		providerName := appCfg.Assistants.System.Provider
+		if providerName == "" {
+			providerName = "opencode"
+		}
+
+		// Build the provider configuration.
+		provider := resolveProvider(providerName)
+
+		sa, saErr := agent.NewACPAssistant(agent.ACPAssistantConfig{
+			Attacher: acpRuntime,
+			Provider: provider,
+		})
+		switch {
+		case errors.Is(saErr, agent.ErrProviderBinaryMissing):
+			log.Printf("Warning: %v — System Assistant disabled", saErr)
+		case saErr != nil:
+			return fmt.Errorf("system assistant: %w", saErr)
+		default:
+			systemAssistant = sa
+			log.Printf("System Assistant ready (provider=%s)", sa.Provider().Name)
+		}
+	}
+
+	// Step 10: Create dispatcher with system assistant.
+	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, systemAssistant, workflowReg)
 
 	// Set up interaction recorder for persisting user commands as Coordination tasks.
 	interactionRecorder := orchestrator.NewInteractionRecorder(taskRepo, agentRepo)
@@ -183,26 +232,7 @@ func run() error {
 	// Ensure adapters are closed on exit.
 	defer adapters.Close()
 
-	// Step 11c: Create ACP worker registry and Runtime (Story 3.12).
-	// The registry is created lazily - workers are only spawned when needed.
-	// The Runtime wires together Pipeline, Interceptor, StatusMapper, Fanout, and BufferRegistry.
-	acpRegistry := acp.NewRegistry(acp.DefaultConfig())
-	permissionRepo := sqlite.NewProjectPermissionRepo(dbConn)
-	bufferRegistry := acp.NewBufferRegistry(acp.DefaultBufferCapacity)
-
-	acpRuntime, err := orchestrator.NewRuntime(ctx, orchestrator.RuntimeConfig{
-		Registry:       acpRegistry,
-		BufferRegistry: bufferRegistry,
-		Mediator:       mediator,
-		PermissionRepo: permissionRepo,
-		TaskRepo:       taskRepo,
-		SessionRepo:    sessionRepo,
-		AgentRepo:      agentRepo,
-	})
-	if err != nil {
-		log.Fatalf("Failed to create ACP runtime: %v", err)
-	}
-
+	// Set ACP references on active session.
 	activeSession.SetACPRegistry(acpRegistry)
 	activeSession.SetACPRuntime(acpRuntime)
 
@@ -362,6 +392,7 @@ func parseFlags() config {
 
 	flag.StringVar(&cfg.dbPath, "db", "", "Override database path (default: "+xdg.DatabasePath()+")")
 	flag.StringVar(&cfg.mode, "mode", "cli", "Client mode: cli or daemon")
+	flag.BoolVar(&cfg.withAssistant, "with-assistant", true, "Enable System Assistant for freeform text queries")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: codemint [options]\n\n")
@@ -383,5 +414,37 @@ func parseClientMode(mode string) (registry.ClientMode, error) {
 		return registry.ClientModeDaemon, nil
 	default:
 		return "", fmt.Errorf("invalid mode %q: must be 'cli' or 'daemon'", mode)
+	}
+}
+
+// resolveProvider maps a provider name to its configuration.
+// This is a simplified provider registry; Story 3.22 will introduce a full ProviderRegistry.
+func resolveProvider(name string) *agent.Provider {
+	switch name {
+	case "opencode":
+		return &agent.Provider{
+			Name:   "opencode",
+			Binary: "opencode",
+			Args:   []string{"acp"},
+		}
+	case "codex":
+		return &agent.Provider{
+			Name:   "codex",
+			Binary: "codex",
+			Args:   []string{"--agent"},
+		}
+	case "claude-code":
+		return &agent.Provider{
+			Name:   "claude-code",
+			Binary: "claude",
+			Args:   []string{"--agent"},
+		}
+	default:
+		// Unknown provider - use name as binary and assume ACP mode.
+		return &agent.Provider{
+			Name:   name,
+			Binary: name,
+			Args:   []string{"acp"},
+		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"codemint.kanthorlabs.com/internal/agent"
 	"codemint.kanthorlabs.com/internal/registry"
 	"codemint.kanthorlabs.com/internal/repl"
 )
@@ -214,12 +215,30 @@ func TestDispatch_ActionClear_CallsUIClearScreen(t *testing.T) {
 
 // --- Test B: System Assistant Fallback ---
 
+// captureAssistant is a test double that records the input it receives.
+type captureAssistant struct {
+	capturedInput string
+	response      string
+}
+
+func (c *captureAssistant) Ask(ctx context.Context, sess agent.AssistantSession, text string) (<-chan agent.ChatChunk, error) {
+	c.capturedInput = text
+	ch := make(chan agent.ChatChunk, 2)
+	go func() {
+		defer close(ch)
+		if c.response != "" {
+			ch <- agent.ChatChunk{Text: c.response}
+		}
+		ch <- agent.ChatChunk{Done: true}
+	}()
+	return ch, nil
+}
+
+func (c *captureAssistant) AgentID() string       { return "test-assistant" }
+func (c *captureAssistant) Provider() *agent.Provider { return &agent.Provider{Name: "test"} }
+
 func TestDispatch_NaturalLanguage_GlobalSession_CallsSystemAssistant(t *testing.T) {
-	var capturedInput string
-	assistant := func(_ context.Context, input string) error {
-		capturedInput = input
-		return nil
-	}
+	assistant := &captureAssistant{response: "Test response"}
 
 	r := registry.NewCommandRegistry()
 	d := NewDispatcher(r, noopUI{}, assistant, nil)
@@ -228,8 +247,26 @@ func TestDispatch_NaturalLanguage_GlobalSession_CallsSystemAssistant(t *testing.
 	if err := d.Dispatch(context.Background(), cliSession(), input); err != nil {
 		t.Fatalf("Dispatch returned unexpected error: %v", err)
 	}
-	if capturedInput != input {
-		t.Errorf("assistant received %q, want %q", capturedInput, input)
+	if assistant.capturedInput != input {
+		t.Errorf("assistant received %q, want %q", assistant.capturedInput, input)
+	}
+}
+
+func TestDispatch_NaturalLanguage_GlobalSession_NilAssistant_FriendlyError(t *testing.T) {
+	ui := &captureUI{}
+	r := registry.NewCommandRegistry()
+	d := NewDispatcher(r, ui, nil, nil) // nil assistant
+
+	err := d.Dispatch(context.Background(), cliSession(), "hello")
+	if err == nil {
+		t.Fatal("expected ErrSystemAssistantDisabled, got nil")
+	}
+	if !errors.Is(err, ErrSystemAssistantDisabled) {
+		t.Errorf("expected ErrSystemAssistantDisabled in chain, got: %v", err)
+	}
+	// Should also render a friendly message
+	if len(ui.messages) == 0 {
+		t.Error("expected a UI message explaining the assistant is disabled, got none")
 	}
 }
 

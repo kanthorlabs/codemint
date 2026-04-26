@@ -176,6 +176,9 @@ const (
 	// auto-approved due to YOLO mode assignment to sys-auto-approve agent.
 	// The payload contains task_id and seq_story for audit purposes.
 	EventYoloAutoApproved UIEventType = "yolo_auto_approved"
+	// EventChatChunk indicates a streaming chunk from an assistant conversation.
+	// The payload is a ChatChunkPayload struct.
+	EventChatChunk UIEventType = "chat_chunk"
 )
 
 // UIEvent represents a fire-and-forget notification broadcast to all UI
@@ -208,6 +211,17 @@ type YoloAutoApprovedPayload struct {
 	SeqStory int    `json:"seq_story"`
 	SeqEpic  int    `json:"seq_epic"`
 	TaskType int    `json:"task_type"`
+}
+
+// ChatChunkPayload contains details about a streaming chat chunk.
+// This payload is used with EventChatChunk events.
+type ChatChunkPayload struct {
+	// Source identifies the origin of the message (e.g., "system-assistant", "agent-coding", "user").
+	Source string `json:"source"`
+	// Text is the content of this chunk.
+	Text string `json:"text"`
+	// Final indicates this is the last chunk of the conversation turn.
+	Final bool `json:"final"`
 }
 
 // PromptKind categorizes the type of decision prompt.
