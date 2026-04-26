@@ -48,12 +48,17 @@ func insertRawTask(t *testing.T, repo *taskRepo, task *domain.Task) {
 	if timeout == 0 {
 		timeout = domain.DefaultTaskTimeout
 	}
+	// Use NULL for empty workflow_id to avoid foreign key constraint failures.
+	var workflowID any
+	if task.WorkflowID != "" {
+		workflowID = task.WorkflowID
+	}
 	_, err := repo.db.ExecContext(ctx, `
 		INSERT INTO task
 		  (id, project_id, session_id, workflow_id, assignee_id,
 		   seq_epic, seq_story, seq_task, type, status, timeout, input, output)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		task.ID, task.ProjectID, task.SessionID, task.WorkflowID, task.AssigneeID,
+		task.ID, task.ProjectID, task.SessionID, workflowID, task.AssigneeID,
 		task.SeqEpic, task.SeqStory, task.SeqTask,
 		int(task.Type), int(task.Status),
 		timeout,

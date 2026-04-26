@@ -43,6 +43,11 @@ func InitDB(ctx context.Context, dbPath string, agentRepo repository.AgentReposi
 		return nil, fmt.Errorf("db: open connection: %w", err)
 	}
 
+	// Enable foreign key constraints (SQLite doesn't enforce them by default).
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		return nil, fmt.Errorf("db: enable foreign keys: %w", err)
+	}
+
 	goose.SetBaseFS(migrations)
 	goose.SetDialect("sqlite3") //nolint:errcheck
 

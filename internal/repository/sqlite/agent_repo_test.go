@@ -20,6 +20,10 @@ func openTestDB(t *testing.T) *sqlx.DB {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
+	// Enable foreign key constraints (SQLite doesn't enforce them by default).
+	if _, err := conn.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
 	goose.SetBaseFS(db.Migrations)
 	goose.SetDialect("sqlite3") //nolint:errcheck
 	if err := goose.Up(conn.DB, "migrations"); err != nil {

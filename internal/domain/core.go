@@ -3,10 +3,56 @@
 package domain
 
 import (
+	"database/sql/driver"
 	"encoding/json"
 
 	"codemint.kanthorlabs.com/internal/util/idgen"
 )
+
+// NullableJSON is a json.RawMessage that supports NULL values from SQLite.
+// It implements sql.Scanner and driver.Valuer for database operations.
+type NullableJSON json.RawMessage
+
+// Scan implements the sql.Scanner interface for NullableJSON.
+func (n *NullableJSON) Scan(value any) error {
+	if value == nil {
+		*n = nil
+		return nil
+	}
+	switch v := value.(type) {
+	case []byte:
+		*n = NullableJSON(v)
+	case string:
+		*n = NullableJSON(v)
+	}
+	return nil
+}
+
+// Value implements the driver.Valuer interface for NullableJSON.
+func (n NullableJSON) Value() (driver.Value, error) {
+	if n == nil {
+		return nil, nil
+	}
+	return []byte(n), nil
+}
+
+// MarshalJSON implements json.Marshaler.
+func (n NullableJSON) MarshalJSON() ([]byte, error) {
+	if n == nil {
+		return []byte("null"), nil
+	}
+	return json.RawMessage(n).MarshalJSON()
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (n *NullableJSON) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*n = nil
+		return nil
+	}
+	*n = NullableJSON(data)
+	return nil
+}
 
 // TaskType represents the kind of work a task performs.
 type TaskType int
@@ -67,11 +113,11 @@ type Project struct {
 
 // ProjectPermission defines command-level access controls for a project.
 type ProjectPermission struct {
-	ID                 string          `db:"id"`
-	ProjectID          string          `db:"project_id"`
-	AllowedCommands    json.RawMessage `db:"allowed_commands"`
-	AllowedDirectories json.RawMessage `db:"allowed_directories"`
-	BlockedCommands    json.RawMessage `db:"blocked_commands"`
+	ID                 string       `db:"id"`
+	ProjectID          string       `db:"project_id"`
+	AllowedCommands    NullableJSON `db:"allowed_commands"`
+	AllowedDirectories NullableJSON `db:"allowed_directories"`
+	BlockedCommands    NullableJSON `db:"blocked_commands"`
 }
 
 // Agent represents an actor that can be assigned tasks.
