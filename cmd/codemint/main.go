@@ -7,17 +7,20 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 
+	appconfig "codemint.kanthorlabs.com/internal/config"
 	"codemint.kanthorlabs.com/internal/db"
 	"codemint.kanthorlabs.com/internal/orchestrator"
 	"codemint.kanthorlabs.com/internal/registry"
 	"codemint.kanthorlabs.com/internal/repl"
 	"codemint.kanthorlabs.com/internal/repository/sqlite"
 	"codemint.kanthorlabs.com/internal/ui"
+	"codemint.kanthorlabs.com/internal/workflow"
 	"codemint.kanthorlabs.com/internal/xdg"
 )
 
@@ -125,10 +128,26 @@ func run() error {
 	// Step 8: Create UI mediator.
 	mediator := ui.NewUIMediator(os.Stdout)
 
-	// Step 9: Create dispatcher (no system assistant yet - EPIC-02).
-	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil)
+	// Step 9: Load configuration and create workflow registry.
+	appCfg, err := appconfig.Load(cfg.configPath)
+	if err != nil {
+		log.Printf("Warning: failed to load config from %s: %v", cfg.configPath, err)
+		appCfg = &appconfig.Config{}
+	}
 
-	// Step 10: Create active session (global mode by default).
+	var workflowReg *workflow.WorkflowRegistry
+	if len(appCfg.Workflows) > 0 {
+		workflowReg, err = workflow.LoadFromConfig(appCfg)
+		if err != nil {
+			return fmt.Errorf("load workflow registry: %w", err)
+		}
+		log.Printf("Loaded %d workflow(s) from config", workflowReg.Len())
+	}
+
+	// Step 10: Create dispatcher (no system assistant yet - EPIC-02).
+	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil, workflowReg)
+
+	// Step 11: Create active session (global mode by default).
 	activeSession := &orchestrator.ActiveSession{
 		ClientMode: clientMode,
 		IsGlobal:   true,
@@ -136,13 +155,13 @@ func run() error {
 		Session:    nil,
 	}
 
-	// Step 11: Create dispatcher wrapper for REPL loop.
+	// Step 12: Create dispatcher wrapper for REPL loop.
 	wrapper := &dispatcherWrapper{
 		dispatcher: dispatcher,
 		session:    activeSession,
 	}
 
-	// Step 12: Start REPL loop.
+	// Step 13: Start REPL loop.
 	fmt.Println("CodeMint - AI-powered coding assistant")
 	fmt.Printf("Version: %s (commit: %s)\n", version, commit)
 	fmt.Println("Type /help for available commands, /exit to quit.")

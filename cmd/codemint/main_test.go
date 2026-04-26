@@ -85,7 +85,7 @@ func TestREPLExitCommand(t *testing.T) {
 	mediator := ui.NewUIMediator(&outBuf)
 
 	// Create dispatcher.
-	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil)
+	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil, nil)
 
 	// Create active session.
 	activeSession := &orchestrator.ActiveSession{
@@ -154,7 +154,7 @@ func TestREPLHelpCommand(t *testing.T) {
 	mediator := ui.NewUIMediator(&outBuf)
 
 	// Create dispatcher.
-	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil)
+	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil, nil)
 
 	// Create active session.
 	activeSession := &orchestrator.ActiveSession{
@@ -227,7 +227,7 @@ func TestREPLContextCancellation(t *testing.T) {
 	mediator := ui.NewUIMediator(&outBuf)
 
 	// Create dispatcher.
-	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil)
+	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil, nil)
 
 	// Create active session.
 	activeSession := &orchestrator.ActiveSession{

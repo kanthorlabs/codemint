@@ -69,7 +69,7 @@ func TestDispatch_SlashCommand_ArgsPassedToHandler(t *testing.T) {
 	var gotRaw string
 
 	r := newTestRegistry(&gotArgs, &gotRaw)
-	d := NewDispatcher(r, noopUI{}, nil)
+	d := NewDispatcher(r, noopUI{}, nil, nil)
 
 	input := `/mock -t "buy milk" -p high`
 	if err := d.Dispatch(context.Background(), cliSession(), input); err != nil {
@@ -95,7 +95,7 @@ func TestDispatch_SlashCommand_ArgsPassedToHandler(t *testing.T) {
 // TestDispatch_UnknownSlashCommand returns an error wrapping ErrCommandNotFound.
 func TestDispatch_UnknownSlashCommand(t *testing.T) {
 	r := registry.NewCommandRegistry()
-	d := NewDispatcher(r, noopUI{}, nil)
+	d := NewDispatcher(r, noopUI{}, nil, nil)
 
 	err := d.Dispatch(context.Background(), cliSession(), "/nonexistent")
 	if err == nil {
@@ -124,7 +124,7 @@ func TestDispatch_CLIOnlyCommand_BlockedInDaemonMode(t *testing.T) {
 	})
 
 	ui := &captureUI{}
-	d := NewDispatcher(r, ui, nil)
+	d := NewDispatcher(r, ui, nil, nil)
 
 	err := d.Dispatch(context.Background(), daemonSession(), "/exit")
 	if err != nil {
@@ -156,7 +156,7 @@ func TestDispatch_CLIOnlyCommand_AllowedInCLIMode(t *testing.T) {
 	})
 
 	ui := &captureUI{}
-	d := NewDispatcher(r, ui, nil)
+	d := NewDispatcher(r, ui, nil, nil)
 
 	err := d.Dispatch(context.Background(), cliSession(), "/exit")
 	if !errors.Is(err, ErrShutdownGracefully) {
@@ -179,7 +179,7 @@ func TestDispatch_ActionExit_ReturnsErrShutdownGracefully(t *testing.T) {
 	})
 
 	ui := &captureUI{}
-	d := NewDispatcher(r, ui, nil)
+	d := NewDispatcher(r, ui, nil, nil)
 
 	err := d.Dispatch(context.Background(), cliSession(), "/exit")
 	if !errors.Is(err, ErrShutdownGracefully) {
@@ -202,7 +202,7 @@ func TestDispatch_ActionClear_CallsUIClearScreen(t *testing.T) {
 	})
 
 	ui := &captureUI{}
-	d := NewDispatcher(r, ui, nil)
+	d := NewDispatcher(r, ui, nil, nil)
 
 	if err := d.Dispatch(context.Background(), cliSession(), "/clear"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -222,7 +222,7 @@ func TestDispatch_NaturalLanguage_GlobalSession_CallsSystemAssistant(t *testing.
 	}
 
 	r := registry.NewCommandRegistry()
-	d := NewDispatcher(r, noopUI{}, assistant)
+	d := NewDispatcher(r, noopUI{}, assistant, nil)
 
 	input := "what is the status of the project?"
 	if err := d.Dispatch(context.Background(), cliSession(), input); err != nil {
@@ -235,7 +235,7 @@ func TestDispatch_NaturalLanguage_GlobalSession_CallsSystemAssistant(t *testing.
 
 func TestDispatch_NaturalLanguage_ProjectSession_ReturnsBrainstormerError(t *testing.T) {
 	r := registry.NewCommandRegistry()
-	d := NewDispatcher(r, noopUI{}, nil)
+	d := NewDispatcher(r, noopUI{}, nil, nil)
 	active := &ActiveSession{ClientMode: registry.ClientModeCLI, IsGlobal: false}
 
 	err := d.Dispatch(context.Background(), active, "add a login endpoint")

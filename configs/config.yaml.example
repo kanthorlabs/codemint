@@ -1,0 +1,23 @@
+# CodeMint Configuration
+# Copy to ~/.config/codemint/config.yaml
+
+workflows:
+  - type: 0
+    name: "Project Coding"
+    description: "Context-aware coding tasks within a project"
+    triggers: ["implement", "fix", "refactor", "add feature", "code", "write"]
+
+  - type: 1
+    name: "Communication"
+    description: "General inquiries and explanations"
+    triggers: ["explain", "what is", "how does", "tell me", "describe", "help"]
+
+  - type: 2
+    name: "Daily Checking"
+    description: "Status checks and routine operations"
+    triggers: ["status", "check", "verify", "test", "review", "analyze"]
+
+# agents:
+#   - name: "System Assistant"
+#     type: 2
+#     assistant: "system"
