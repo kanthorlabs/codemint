@@ -3,6 +3,7 @@
 package orchestrator
 
 import (
+	"codemint.kanthorlabs.com/internal/acp"
 	"codemint.kanthorlabs.com/internal/domain"
 	"codemint.kanthorlabs.com/internal/registry"
 )
@@ -33,6 +34,11 @@ type ActiveSession struct {
 	// LastSeenTaskID tracks the last coordination task seen by this client.
 	// Used to show "missed activity" when reclaiming a suspended session.
 	LastSeenTaskID string
+	// acpRegistry is the ACP worker registry for managing agent processes.
+	acpRegistry *acp.Registry
+	// acpSessionID is the ACP session ID for the current session's worker.
+	// This is the session ID returned by session/new from the ACP agent.
+	ACPSessionID string
 }
 
 // GetClientMode satisfies registry.ActiveSessionInfo.
@@ -75,6 +81,36 @@ func (a *ActiveSession) SetSuspended(suspended bool) {
 // SetClientMode satisfies registry.MutableSessionInfo.
 func (a *ActiveSession) SetClientMode(mode registry.ClientMode) {
 	a.ClientMode = mode
+}
+
+// SetACPRegistry sets the ACP worker registry for this session.
+func (a *ActiveSession) SetACPRegistry(reg *acp.Registry) {
+	a.acpRegistry = reg
+}
+
+// ACPRegistry returns the ACP worker registry, or nil if not set.
+func (a *ActiveSession) ACPRegistry() *acp.Registry {
+	return a.acpRegistry
+}
+
+// GetProject returns the active project, or nil.
+func (a *ActiveSession) GetProject() *domain.Project {
+	return a.Project
+}
+
+// GetSession returns the active session, or nil.
+func (a *ActiveSession) GetSession() *domain.Session {
+	return a.Session
+}
+
+// GetACPSessionID returns the ACP session ID.
+func (a *ActiveSession) GetACPSessionID() string {
+	return a.ACPSessionID
+}
+
+// SetACPSessionID sets the ACP session ID.
+func (a *ActiveSession) SetACPSessionID(id string) {
+	a.ACPSessionID = id
 }
 
 // Compile-time assertion: *ActiveSession must satisfy registry.ActiveSessionInfo.

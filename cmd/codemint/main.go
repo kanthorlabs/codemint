@@ -12,7 +12,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
+	"codemint.kanthorlabs.com/internal/acp"
 	appconfig "codemint.kanthorlabs.com/internal/config"
 	"codemint.kanthorlabs.com/internal/db"
 	"codemint.kanthorlabs.com/internal/orchestrator"
@@ -163,6 +165,20 @@ func run() error {
 	// Create active session from load result.
 	activeSession := sessionLoader.CreateActiveSession(loadResult, clientMode)
 
+	// Step 11b: Create ACP worker registry.
+	// The registry is created lazily - workers are only spawned when needed.
+	acpRegistry := acp.NewRegistry(acp.DefaultConfig())
+	activeSession.SetACPRegistry(acpRegistry)
+
+	// Ensure ACP workers are stopped on exit.
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := acpRegistry.StopAll(shutdownCtx); err != nil {
+			log.Printf("Warning: failed to stop ACP workers: %v", err)
+		}
+	}()
+
 	// Register session commands (needs active session).
 	sessionCmdDeps := &repl.SessionCommandDeps{
 		SessionRepo:   sessionRepo,
@@ -180,6 +196,17 @@ func run() error {
 	}
 	if err := repl.RegisterModeCommands(cmdRegistry, modeCmdDeps); err != nil {
 		return fmt.Errorf("register mode commands: %w", err)
+	}
+
+	// Register ACP commands.
+	acpCmdDeps := &repl.ACPCommandDeps{
+		ActiveSession: activeSession,
+		TaskRepo:      taskRepo,
+		AgentRepo:     agentRepo,
+		UIMediator:    mediator,
+	}
+	if err := repl.RegisterACPCommands(cmdRegistry, acpCmdDeps); err != nil {
+		return fmt.Errorf("register acp commands: %w", err)
 	}
 
 	// Step 12: Start heartbeat goroutine if we have an active session.
@@ -218,9 +245,6 @@ func run() error {
 		fmt.Fprintln(os.Stderr, "\nReceived shutdown signal, exiting...")
 		return nil
 	}
-
-	// Suppress unused variable warnings during development.
-	_ = taskRepo
 
 	return err
 }

@@ -1,0 +1,326 @@
+package acp
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestWorker_Echo(t *testing.T) {
+	// Create a mock ACP server script that echoes requests back as responses
+	dir := t.TempDir()
+	script := filepath.Join(dir, "mock_acp.sh")
+
+	// Mock script that:
+	// 1. Reads JSON lines from stdin
+	// 2. For initialize: returns a response with capabilities
+	// 3. For other requests: echoes them back
+	mockScript := `#!/bin/bash
+while IFS= read -r line; do
+    method=$(echo "$line" | grep -o '"method":"[^"]*"' | cut -d'"' -f4)
+    id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
+    
+    if [ "$method" = "initialize" ]; then
+        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{\"streaming\":true,\"toolCalls\":true}}}"
+    elif [ -n "$id" ] && [ "$id" != "null" ]; then
+        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"echo\":true}}"
+    fi
+done
+`
+	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cfg := WorkerConfig{
+		Command:          "/bin/bash",
+		Args:             []string{script},
+		Cwd:              dir,
+		HandshakeTimeout: 2 * time.Second,
+	}
+
+	worker, err := Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer worker.Stop()
+
+	// Verify capabilities were set
+	caps := worker.Capabilities()
+	if caps.ServerInfo.Name != "mock" {
+		t.Errorf("ServerInfo.Name = %q; want %q", caps.ServerInfo.Name, "mock")
+	}
+	if !caps.Capabilities.Streaming {
+		t.Error("Capabilities.Streaming = false; want true")
+	}
+
+	// Send a test request
+	req, err := NewRequest("test/echo", map[string]string{"hello": "world"})
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+
+	resp, err := worker.SendRequest(ctx, req)
+	if err != nil {
+		t.Fatalf("SendRequest: %v", err)
+	}
+
+	if resp.Error != nil {
+		t.Fatalf("response has error: %v", resp.Error)
+	}
+
+	var result map[string]bool
+	if err := resp.ParseResult(&result); err != nil {
+		t.Fatalf("ParseResult: %v", err)
+	}
+	if !result["echo"] {
+		t.Error("result[\"echo\"] = false; want true")
+	}
+}
+
+func TestWorker_StopClosesChannel(t *testing.T) {
+	// Create a simple script that just reads stdin forever
+	dir := t.TempDir()
+	script := filepath.Join(dir, "mock_acp.sh")
+
+	mockScript := `#!/bin/bash
+# Return initialize response
+read line
+id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
+echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
+
+# Then just wait
+while read line; do :; done
+`
+	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+
+	ctx := context.Background()
+	cfg := WorkerConfig{
+		Command:          "/bin/bash",
+		Args:             []string{script},
+		HandshakeTimeout: 2 * time.Second,
+	}
+
+	worker, err := Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	// Stop the worker
+	worker.Stop()
+
+	// Verify done channel closes within 1s
+	select {
+	case <-worker.Done():
+		// Expected
+	case <-time.After(1 * time.Second):
+		t.Error("worker did not stop within 1s")
+		worker.Kill()
+	}
+
+	// Verify out channel is closed
+	select {
+	case _, ok := <-worker.Out():
+		if ok {
+			t.Error("out channel should be closed")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("out channel should be closed immediately")
+	}
+
+	// Verify Alive returns false
+	if worker.Alive() {
+		t.Error("Alive() = true; want false after stop")
+	}
+}
+
+func TestWorker_HandshakeTimeout(t *testing.T) {
+	// Create a script that never responds
+	dir := t.TempDir()
+	script := filepath.Join(dir, "slow_acp.sh")
+
+	// Script that reads but never responds
+	mockScript := `#!/bin/bash
+while read line; do :; done
+`
+	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+
+	ctx := context.Background()
+	cfg := WorkerConfig{
+		Command:          "/bin/bash",
+		Args:             []string{script},
+		HandshakeTimeout: 100 * time.Millisecond, // Very short timeout
+	}
+
+	_, err := Spawn(ctx, cfg)
+	if err == nil {
+		t.Fatal("Spawn should fail with timeout")
+	}
+	if err != ErrHandshakeTimeout {
+		t.Errorf("error = %v; want ErrHandshakeTimeout", err)
+	}
+}
+
+func TestWorker_CommandNotFound(t *testing.T) {
+	ctx := context.Background()
+	cfg := WorkerConfig{
+		Command: "nonexistent_command_12345",
+	}
+
+	_, err := Spawn(ctx, cfg)
+	if err == nil {
+		t.Fatal("Spawn should fail when command not found")
+	}
+}
+
+func TestWorker_Pid(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "mock_acp.sh")
+
+	mockScript := `#!/bin/bash
+read line
+id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
+echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
+while read line; do :; done
+`
+	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+
+	ctx := context.Background()
+	cfg := WorkerConfig{
+		Command:          "/bin/bash",
+		Args:             []string{script},
+		HandshakeTimeout: 2 * time.Second,
+	}
+
+	worker, err := Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer worker.Kill()
+
+	pid := worker.Pid()
+	if pid <= 0 {
+		t.Errorf("Pid() = %d; want > 0", pid)
+	}
+}
+
+func TestWorker_Notifications(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "mock_acp.sh")
+
+	// Script that sends notifications after initialize
+	mockScript := `#!/bin/bash
+read line
+id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
+echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{\"streaming\":true}}}"
+
+# Send some notifications
+sleep 0.1
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"test-123","update":{"sessionUpdate":"agent_message_chunk"}}}'
+echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"test-123","update":{"sessionUpdate":"agent_message_chunk"}}}'
+
+# Keep alive briefly
+sleep 0.5
+`
+	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cfg := WorkerConfig{
+		Command:          "/bin/bash",
+		Args:             []string{script},
+		HandshakeTimeout: 2 * time.Second,
+	}
+
+	worker, err := Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer worker.Stop()
+
+	// Collect notifications
+	var notifications []Message
+	timeout := time.After(2 * time.Second)
+
+	for {
+		select {
+		case msg, ok := <-worker.Out():
+			if !ok {
+				goto done
+			}
+			if msg.IsNotification() {
+				notifications = append(notifications, msg)
+			}
+		case <-timeout:
+			goto done
+		case <-worker.Done():
+			goto done
+		}
+	}
+done:
+
+	if len(notifications) < 2 {
+		t.Errorf("received %d notifications; want at least 2", len(notifications))
+	}
+
+	for _, notif := range notifications {
+		if notif.Method != MethodSessionUpdate {
+			t.Errorf("notification method = %q; want %q", notif.Method, MethodSessionUpdate)
+		}
+	}
+}
+
+func TestWorker_SendToStoppedWorker(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "mock_acp.sh")
+
+	mockScript := `#!/bin/bash
+read line
+id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
+echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
+# Exit immediately after init
+`
+	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+
+	ctx := context.Background()
+	cfg := WorkerConfig{
+		Command:          "/bin/bash",
+		Args:             []string{script},
+		HandshakeTimeout: 2 * time.Second,
+	}
+
+	worker, err := Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	// Wait for worker to exit
+	<-worker.Done()
+
+	// Try to send a message
+	msg := &Message{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage("1"),
+		Method:  "test",
+	}
+	err = worker.Send(msg)
+	if err != ErrWorkerExited {
+		t.Errorf("Send to stopped worker: error = %v; want ErrWorkerExited", err)
+	}
+}
