@@ -75,6 +75,20 @@ func (r *Registry) GetOrSpawn(ctx context.Context, sess *domain.Session, project
 		cfg.Cwd = project.WorkingDir
 	}
 
+	// Load and inject project memory (Story 3.11)
+	if project != nil && project.ID != "" {
+		systemPrompt, err := BuildSystemPromptFromProjectID(project.ID)
+		if err != nil {
+			slog.Warn("acp: failed to load project memory",
+				"projectID", project.ID,
+				"error", err,
+			)
+			// Continue with empty system prompt - memory is optional
+		} else {
+			cfg.SystemPrompt = systemPrompt
+		}
+	}
+
 	// Spawn the worker
 	worker, err := Spawn(ctx, cfg)
 	if err != nil {
@@ -88,6 +102,7 @@ func (r *Registry) GetOrSpawn(ctx context.Context, sess *domain.Session, project
 		"sessionID", sess.ID,
 		"pid", worker.Pid(),
 		"cwd", worker.Cwd(),
+		"hasMemory", cfg.SystemPrompt != "",
 	)
 
 	// Start cleanup goroutine for when worker exits

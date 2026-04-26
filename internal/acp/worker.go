@@ -41,6 +41,7 @@ type WorkerConfig struct {
 	Cwd              string        // Working directory for the process
 	Env              []string      // Additional environment variables (appended to os.Environ())
 	HandshakeTimeout time.Duration // Timeout for initialize handshake (default: 10s)
+	SystemPrompt     string        // System prompt with memory injection for the session
 }
 
 // DefaultConfig returns a WorkerConfig with default values.
@@ -75,6 +76,11 @@ type Worker struct {
 
 	// Capabilities from initialize handshake
 	capabilities InitializeResult
+
+	// acpSessionID is the current ACP session ID.
+	// Updated after session/new calls.
+	acpSessionID   string
+	acpSessionIDMu sync.RWMutex
 
 	// currentTaskID is the ID of the task currently being processed by this worker.
 	// Empty string for ad-hoc /acp prompts. Used by StatusMapper (Story 3.7).
@@ -157,6 +163,14 @@ func Spawn(ctx context.Context, cfg WorkerConfig) (*Worker, error) {
 		w.Stop()
 		return nil, err
 	}
+
+	// Create initial session with system prompt (memory injection)
+	sessionID, err := w.createSession(ctx, cfg.SystemPrompt)
+	if err != nil {
+		w.Stop()
+		return nil, fmt.Errorf("acp: create initial session: %w", err)
+	}
+	w.setACPSessionID(sessionID)
 
 	return w, nil
 }
@@ -426,8 +440,29 @@ func (w *Worker) ResetContext(ctx context.Context, currentSessionID string) (str
 		}
 	}
 
-	// Create a new session
-	newParams := SessionNewParams{}
+	// Create a new session with the same system prompt (memory re-injection)
+	newSessionID, err := w.createSession(ctx, w.cfg.SystemPrompt)
+	if err != nil {
+		return "", err
+	}
+
+	w.setACPSessionID(newSessionID)
+
+	slog.Debug("acp: context reset",
+		"session_id", newSessionID,
+		"old_acp", oldSessionID,
+		"new_acp", newSessionID,
+		"has_system_prompt", w.cfg.SystemPrompt != "",
+	)
+
+	return newSessionID, nil
+}
+
+// createSession creates a new ACP session with optional system prompt.
+func (w *Worker) createSession(ctx context.Context, systemPrompt string) (string, error) {
+	newParams := SessionNewParams{
+		SystemPrompt: systemPrompt,
+	}
 	newReq, err := NewRequest(MethodSessionNew, newParams)
 	if err != nil {
 		return "", fmt.Errorf("acp: create session/new request: %w", err)
@@ -447,13 +482,26 @@ func (w *Worker) ResetContext(ctx context.Context, currentSessionID string) (str
 		return "", fmt.Errorf("acp: parse session/new result: %w", err)
 	}
 
-	slog.Debug("acp: context reset",
-		"session_id", result.SessionID,
-		"old_acp", oldSessionID,
-		"new_acp", result.SessionID,
-	)
-
 	return result.SessionID, nil
+}
+
+// ACPSessionID returns the current ACP session ID.
+func (w *Worker) ACPSessionID() string {
+	w.acpSessionIDMu.RLock()
+	defer w.acpSessionIDMu.RUnlock()
+	return w.acpSessionID
+}
+
+// setACPSessionID sets the current ACP session ID.
+func (w *Worker) setACPSessionID(sessionID string) {
+	w.acpSessionIDMu.Lock()
+	defer w.acpSessionIDMu.Unlock()
+	w.acpSessionID = sessionID
+}
+
+// SystemPrompt returns the system prompt configured for this worker.
+func (w *Worker) SystemPrompt() string {
+	return w.cfg.SystemPrompt
 }
 
 // initialize performs the JSON-RPC initialize handshake.

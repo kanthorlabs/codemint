@@ -2,7 +2,11 @@ package acp
 
 import (
 	"encoding/json"
+	"strings"
 )
+
+// MemoryOverrideTag is the tag emitted by agents when they override project memory.
+const MemoryOverrideTag = "[memory-override]"
 
 // EventKind categorizes the type of event from the ACP stream.
 type EventKind int
@@ -215,4 +219,54 @@ func classifyByPattern(kind string) EventKind {
 	default:
 		return EventUnknown
 	}
+}
+
+// agentMessageChunk represents the structure of an agent_message_chunk update.
+type agentMessageChunk struct {
+	SessionUpdate string `json:"sessionUpdate"`
+	Content       string `json:"content"`
+	Text          string `json:"text"` // Alternative field name
+}
+
+// ExtractMessageContent extracts the text content from an agent message event.
+// Returns empty string if the event is not a message event or content cannot be extracted.
+func ExtractMessageContent(ev Event) string {
+	if ev.Kind != EventMessage {
+		return ""
+	}
+
+	// Try to parse the raw update body from the session update
+	var update SessionUpdate
+	if err := json.Unmarshal(ev.Raw, &update); err != nil {
+		// Try parsing as just the update body
+		var msgChunk agentMessageChunk
+		if err := json.Unmarshal(ev.Raw, &msgChunk); err != nil {
+			return ""
+		}
+		if msgChunk.Content != "" {
+			return msgChunk.Content
+		}
+		return msgChunk.Text
+	}
+
+	// Parse the update body for content
+	var msgChunk agentMessageChunk
+	if err := json.Unmarshal(update.Update.Raw, &msgChunk); err != nil {
+		return ""
+	}
+	if msgChunk.Content != "" {
+		return msgChunk.Content
+	}
+	return msgChunk.Text
+}
+
+// ContainsMemoryOverrideTag checks if the event contains the memory override tag.
+// This is used to detect when the agent intentionally overrides project preferences.
+func ContainsMemoryOverrideTag(ev Event) bool {
+	if ev.Kind != EventMessage {
+		return false
+	}
+
+	content := ExtractMessageContent(ev)
+	return strings.Contains(content, MemoryOverrideTag)
 }

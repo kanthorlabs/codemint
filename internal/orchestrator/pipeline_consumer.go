@@ -103,6 +103,16 @@ func (c *PipelineConsumer) consumeEvents(ctx context.Context, events <-chan acp.
 				c.bufferRegistry.Push(sessionID, taskID, ev)
 			}
 
+			// Check for memory-override tag in agent messages (Task 3.11.4).
+			// This logs when the agent overrides project preferences from memory.
+			if acp.ContainsMemoryOverrideTag(ev) {
+				c.logger.Info("acp.memory.override",
+					"session_id", sessionID,
+					"task_id", taskID,
+					"event_kind", ev.Kind.String(),
+				)
+			}
+
 			// Apply StatusMapper for lifecycle events (turn-start/turn-end).
 			if c.mapper != nil && (ev.Kind == acp.EventTurnStart || ev.Kind == acp.EventTurnEnd) {
 				if err := c.mapper.Apply(ctx, taskID, ev); err != nil {

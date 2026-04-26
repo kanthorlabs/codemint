@@ -175,7 +175,8 @@ type ServerCaps struct {
 
 // SessionNewParams represents the parameters for session/new.
 type SessionNewParams struct {
-	SessionID string `json:"sessionId,omitempty"` // optional; server generates if empty
+	SessionID    string `json:"sessionId,omitempty"`    // optional; server generates if empty
+	SystemPrompt string `json:"systemPrompt,omitempty"` // optional; injected memory/context for the session
 }
 
 // SessionNewResult represents the result of session/new.
