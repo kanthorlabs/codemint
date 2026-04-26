@@ -13,10 +13,9 @@ import (
 // project session but no Brainstormer handler has been wired up yet (EPIC-02).
 var ErrNoBrainstormer = errors.New("orchestrator: brainstormer not available (EPIC-02)")
 
-// ErrShutdownGracefully is returned by Dispatch when a command requests a
-// clean process exit (ActionExit). Callers should treat this as a signal to
-// flush state and terminate rather than as an unexpected error.
-var ErrShutdownGracefully = errors.New("orchestrator: shutdown requested")
+// ErrShutdownGracefully is an alias for registry.ErrShutdownGracefully for
+// backward compatibility. Prefer using registry.ErrShutdownGracefully directly.
+var ErrShutdownGracefully = registry.ErrShutdownGracefully
 
 // Dispatcher routes user input to slash-command handlers or the appropriate
 // AI assistant path depending on the current ActiveSession.

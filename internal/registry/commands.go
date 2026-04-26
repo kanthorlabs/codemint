@@ -21,6 +21,12 @@ var ErrCommandNotFound = errors.New("registry: command not found")
 // name has already been registered.
 var ErrDuplicateCommand = errors.New("registry: duplicate command name")
 
+// ErrShutdownGracefully is returned when a command requests a clean process
+// exit (ActionExit). Callers should treat this as a signal to flush state
+// and terminate rather than as an unexpected error. This error is defined
+// here to avoid import cycles between orchestrator and repl packages.
+var ErrShutdownGracefully = errors.New("registry: shutdown requested")
+
 // ClientMode describes the runtime environment in which CodeMint is operating.
 // Defining it here (rather than in the orchestrator package) avoids an import
 // cycle, since the orchestrator imports the registry.
