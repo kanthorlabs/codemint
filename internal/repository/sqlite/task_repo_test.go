@@ -702,3 +702,164 @@ func TestUpdateStatus_StoresValueForNonEmptyOutput(t *testing.T) {
 		t.Errorf("output: got %q, want %q", output, expectedOutput)
 	}
 }
+
+// TestMostRecentActive_ReturnsProcessing asserts that MostRecentActive returns
+// the most recently created task in Processing status.
+func TestMostRecentActive_ReturnsProcessing(t *testing.T) {
+	repo, projectID, sessionID, agentID := setupTaskFixtures(t)
+	ctx := context.Background()
+
+	tasks := []*domain.Task{
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 1,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending,
+		},
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 2,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusProcessing,
+		},
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 3,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusSuccess,
+		},
+	}
+
+	for _, task := range tasks {
+		insertRawTask(t, repo, task)
+	}
+
+	result, err := repo.MostRecentActive(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("MostRecentActive returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("MostRecentActive returned nil, expected Processing task")
+	}
+	if result.ID != tasks[1].ID {
+		t.Errorf("MostRecentActive returned task %q, want %q", result.ID, tasks[1].ID)
+	}
+	if result.Status != domain.TaskStatusProcessing {
+		t.Errorf("MostRecentActive status = %d, want Processing", result.Status)
+	}
+}
+
+// TestMostRecentActive_ReturnsAwaiting asserts that MostRecentActive returns
+// the most recently created task in Awaiting status.
+func TestMostRecentActive_ReturnsAwaiting(t *testing.T) {
+	repo, projectID, sessionID, agentID := setupTaskFixtures(t)
+	ctx := context.Background()
+
+	tasks := []*domain.Task{
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 1,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending,
+		},
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 2,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusAwaiting,
+		},
+	}
+
+	for _, task := range tasks {
+		insertRawTask(t, repo, task)
+	}
+
+	result, err := repo.MostRecentActive(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("MostRecentActive returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("MostRecentActive returned nil, expected Awaiting task")
+	}
+	if result.ID != tasks[1].ID {
+		t.Errorf("MostRecentActive returned task %q, want %q", result.ID, tasks[1].ID)
+	}
+}
+
+// TestMostRecentActive_ReturnsLatestByID asserts that when multiple active
+// tasks exist, the one with the highest (most recent) ID is returned.
+func TestMostRecentActive_ReturnsLatestByID(t *testing.T) {
+	repo, projectID, sessionID, agentID := setupTaskFixtures(t)
+	ctx := context.Background()
+
+	// Insert multiple Processing tasks; last inserted has highest ID (ULID).
+	tasks := []*domain.Task{
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 1,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusProcessing,
+		},
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 2,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusProcessing,
+		},
+	}
+
+	for _, task := range tasks {
+		insertRawTask(t, repo, task)
+	}
+
+	result, err := repo.MostRecentActive(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("MostRecentActive returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("MostRecentActive returned nil, expected a task")
+	}
+	// Last inserted task has highest ID.
+	if result.ID != tasks[1].ID {
+		t.Errorf("MostRecentActive returned task %q, want %q (most recent)", result.ID, tasks[1].ID)
+	}
+}
+
+// TestMostRecentActive_ReturnsNilWhenNoActive asserts that MostRecentActive
+// returns nil when no task is in Processing or Awaiting status.
+func TestMostRecentActive_ReturnsNilWhenNoActive(t *testing.T) {
+	repo, projectID, sessionID, agentID := setupTaskFixtures(t)
+	ctx := context.Background()
+
+	tasks := []*domain.Task{
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 1,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusPending,
+		},
+		{
+			ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+			AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 2,
+			Type: domain.TaskTypeCoding, Status: domain.TaskStatusSuccess,
+		},
+	}
+
+	for _, task := range tasks {
+		insertRawTask(t, repo, task)
+	}
+
+	result, err := repo.MostRecentActive(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("MostRecentActive returned error: %v", err)
+	}
+	if result != nil {
+		t.Errorf("MostRecentActive returned task %q, expected nil", result.ID)
+	}
+}
+
+// TestMostRecentActive_ReturnsNilWhenEmpty asserts that MostRecentActive
+// returns nil when no tasks exist for the session.
+func TestMostRecentActive_ReturnsNilWhenEmpty(t *testing.T) {
+	repo, _, sessionID, _ := setupTaskFixtures(t)
+
+	result, err := repo.MostRecentActive(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("MostRecentActive returned error: %v", err)
+	}
+	if result != nil {
+		t.Errorf("MostRecentActive returned task %q, expected nil for empty session", result.ID)
+	}
+}

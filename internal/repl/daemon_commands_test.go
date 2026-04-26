@@ -51,6 +51,15 @@ func (m *mockTaskRepoForDaemon) ListBySession(_ context.Context, sessionID strin
 	}
 	return result, nil
 }
+func (m *mockTaskRepoForDaemon) MostRecentActive(_ context.Context, sessionID string) (*domain.Task, error) {
+	for i := len(m.tasks) - 1; i >= 0; i-- {
+		t := m.tasks[i]
+		if t.SessionID == sessionID && (t.Status == domain.TaskStatusProcessing || t.Status == domain.TaskStatusAwaiting) {
+			return t, nil
+		}
+	}
+	return nil, nil
+}
 
 // mockActiveSessionForDaemon implements MutableSessionInfo for testing.
 type mockActiveSessionForDaemon struct {

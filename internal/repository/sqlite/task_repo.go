@@ -303,3 +303,29 @@ func (r *taskRepo) ListBySession(ctx context.Context, sessionID string) ([]*doma
 	}
 	return tasks, nil
 }
+
+// MostRecentActive returns the most recently active task in the session
+// that is in Processing (1) or Awaiting (2) status. The "most recent" is
+// determined by the highest ID (since IDs are ULIDs, lexicographically
+// larger means more recently created).
+func (r *taskRepo) MostRecentActive(ctx context.Context, sessionID string) (*domain.Task, error) {
+	const query = `
+		SELECT id, project_id, session_id, workflow_id, assignee_id,
+		       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id
+		FROM task
+		WHERE session_id = ?
+		  AND status IN (?, ?)
+		ORDER BY id DESC
+		LIMIT 1`
+
+	var t domain.Task
+	err := r.db.GetContext(ctx, &t, query, sessionID,
+		int(domain.TaskStatusProcessing), int(domain.TaskStatusAwaiting))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("sqlite: most recent active task for session %q: %w", sessionID, err)
+	}
+	return &t, nil
+}

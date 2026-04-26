@@ -179,6 +179,18 @@ func (m *interceptorMockTaskRepo) ListBySession(ctx context.Context, sessionID s
 	return nil, nil
 }
 
+func (m *interceptorMockTaskRepo) MostRecentActive(ctx context.Context, sessionID string) (*domain.Task, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := len(m.tasks) - 1; i >= 0; i-- {
+		t := m.tasks[i]
+		if t.SessionID == sessionID && (t.Status == domain.TaskStatusProcessing || t.Status == domain.TaskStatusAwaiting) {
+			return t, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *interceptorMockTaskRepo) StatusUpdates() []statusUpdate {
 	m.mu.Lock()
 	defer m.mu.Unlock()

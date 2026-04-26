@@ -7,26 +7,35 @@ import (
 	"codemint.kanthorlabs.com/internal/acp"
 )
 
+// TaskIDProvider provides the current task ID.
+// This interface exists for testability - in production, *acp.Worker implements this.
+type TaskIDProvider interface {
+	CurrentTaskID() string
+}
+
 // PipelineConsumer consumes events from the ACP Pipeline and applies the StatusMapper.
 // It handles both the Events channel (turn-start/turn-end) and the Halted channel
 // (permission requests that were not auto-approved).
 //
 // This implements Task 3.7.2: Drive the Mapper From the Pipeline.
+// It also pushes events to the BufferRegistry for the /summary command (Task 3.10.2).
 type PipelineConsumer struct {
-	mapper      *StatusMapper
-	interceptor *Interceptor
-	fanout      *Fanout
-	worker      *acp.Worker
-	logger      *slog.Logger
+	mapper         *StatusMapper
+	interceptor    *Interceptor
+	fanout         *Fanout
+	taskIDProvider TaskIDProvider
+	bufferRegistry *acp.BufferRegistry
+	logger         *slog.Logger
 }
 
 // PipelineConsumerConfig holds the dependencies for creating a PipelineConsumer.
 type PipelineConsumerConfig struct {
-	Mapper      *StatusMapper
-	Interceptor *Interceptor
-	Fanout      *Fanout
-	Worker      *acp.Worker
-	Logger      *slog.Logger
+	Mapper         *StatusMapper
+	Interceptor    *Interceptor
+	Fanout         *Fanout
+	Worker         TaskIDProvider // *acp.Worker in production
+	BufferRegistry *acp.BufferRegistry
+	Logger         *slog.Logger
 }
 
 // NewPipelineConsumer creates a new PipelineConsumer with the provided dependencies.
@@ -37,17 +46,18 @@ func NewPipelineConsumer(cfg PipelineConsumerConfig) *PipelineConsumer {
 	}
 
 	return &PipelineConsumer{
-		mapper:      cfg.Mapper,
-		interceptor: cfg.Interceptor,
-		fanout:      cfg.Fanout,
-		worker:      cfg.Worker,
-		logger:      logger,
+		mapper:         cfg.Mapper,
+		interceptor:    cfg.Interceptor,
+		fanout:         cfg.Fanout,
+		taskIDProvider: cfg.Worker,
+		bufferRegistry: cfg.BufferRegistry,
+		logger:         logger,
 	}
 }
 
 // Run starts consuming events from the pipeline channels.
 // It blocks until the context is cancelled or both channels are closed.
-// The sessionID is used for interceptor context.
+// The sessionID is used for interceptor context and buffer registry.
 func (c *PipelineConsumer) Run(ctx context.Context, pipeline *acp.Pipeline, sessionID string) {
 	// Start goroutines to consume both channels.
 	eventsDone := make(chan struct{})
@@ -55,7 +65,7 @@ func (c *PipelineConsumer) Run(ctx context.Context, pipeline *acp.Pipeline, sess
 
 	go func() {
 		defer close(eventsDone)
-		c.consumeEvents(ctx, pipeline.Events)
+		c.consumeEvents(ctx, pipeline.Events, sessionID)
 	}()
 
 	go func() {
@@ -71,7 +81,7 @@ func (c *PipelineConsumer) Run(ctx context.Context, pipeline *acp.Pipeline, sess
 // consumeEvents processes events from the Pipeline.Events channel.
 // It applies StatusMapper for turn-start/turn-end events and forwards
 // all events to Fanout for UI rendering.
-func (c *PipelineConsumer) consumeEvents(ctx context.Context, events <-chan acp.Event) {
+func (c *PipelineConsumer) consumeEvents(ctx context.Context, events <-chan acp.Event, sessionID string) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -83,8 +93,14 @@ func (c *PipelineConsumer) consumeEvents(ctx context.Context, events <-chan acp.
 
 			// Get the current task ID from the worker.
 			taskID := ""
-			if c.worker != nil {
-				taskID = c.worker.CurrentTaskID()
+			if c.taskIDProvider != nil {
+				taskID = c.taskIDProvider.CurrentTaskID()
+			}
+
+			// Push to BufferRegistry for /summary command (Task 3.10.2).
+			// This captures the event before any processing for debugging purposes.
+			if c.bufferRegistry != nil {
+				c.bufferRegistry.Push(sessionID, taskID, ev)
 			}
 
 			// Apply StatusMapper for lifecycle events (turn-start/turn-end).
@@ -122,8 +138,14 @@ func (c *PipelineConsumer) consumeHalted(ctx context.Context, halted <-chan acp.
 
 			// Get the current task ID from the worker.
 			taskID := ""
-			if c.worker != nil {
-				taskID = c.worker.CurrentTaskID()
+			if c.taskIDProvider != nil {
+				taskID = c.taskIDProvider.CurrentTaskID()
+			}
+
+			// Push to BufferRegistry for /summary command (Task 3.10.2).
+			// This captures tool calls and permission requests for debugging.
+			if c.bufferRegistry != nil {
+				c.bufferRegistry.Push(sessionID, taskID, ev)
 			}
 
 			// Forward to interceptor to evaluate against permissions.

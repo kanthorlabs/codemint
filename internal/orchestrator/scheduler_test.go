@@ -44,6 +44,9 @@ func (m *mockTaskRepoForScheduler) ListCoordinationAfter(_ context.Context, _ st
 func (m *mockTaskRepoForScheduler) ListBySession(_ context.Context, _ string) ([]*domain.Task, error) {
 	return nil, nil
 }
+func (m *mockTaskRepoForScheduler) MostRecentActive(_ context.Context, _ string) (*domain.Task, error) {
+	return nil, nil
+}
 
 type mockExecutorForScheduler struct {
 	executedTasks []*domain.Task

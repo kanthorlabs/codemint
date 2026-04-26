@@ -64,6 +64,10 @@ func (m *mockTaskRepo) ListBySession(_ context.Context, _ string) ([]*domain.Tas
 	return nil, nil
 }
 
+func (m *mockTaskRepo) MostRecentActive(_ context.Context, _ string) (*domain.Task, error) {
+	return nil, nil
+}
+
 // --- Mock CodingAgent ---
 
 type mockCodingAgent struct {

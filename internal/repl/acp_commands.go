@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"codemint.kanthorlabs.com/internal/acp"
 	"codemint.kanthorlabs.com/internal/domain"
@@ -29,13 +30,14 @@ type ACPSessionInfo interface {
 
 // ACPCommandDeps holds the dependencies needed for ACP-related commands.
 type ACPCommandDeps struct {
-	ActiveSession ACPSessionInfo
-	TaskRepo      repository.TaskRepository
-	AgentRepo     repository.AgentRepository
-	UIMediator    registry.UIMediator
+	ActiveSession  ACPSessionInfo
+	TaskRepo       repository.TaskRepository
+	AgentRepo      repository.AgentRepository
+	UIMediator     registry.UIMediator
+	BufferRegistry *acp.BufferRegistry
 }
 
-// RegisterACPCommands registers ACP worker commands (/acp, /acp-status, /acp-stop, /acp-reset).
+// RegisterACPCommands registers ACP worker commands (/acp, /acp-status, /acp-stop, /acp-reset, /summary).
 func RegisterACPCommands(r *registry.CommandRegistry, deps *ACPCommandDeps) error {
 	commands := []registry.Command{
 		{
@@ -65,6 +67,13 @@ func RegisterACPCommands(r *registry.CommandRegistry, deps *ACPCommandDeps) erro
 			Usage:          "/acp-reset",
 			SupportedModes: []registry.ClientMode{registry.ClientModeCLI, registry.ClientModeDaemon},
 			Handler:        acpResetHandler(deps),
+		},
+		{
+			Name:           "summary",
+			Description:    "Show recent ACP events for a task (debug what the agent is thinking).",
+			Usage:          "/summary [task_id]",
+			SupportedModes: []registry.ClientMode{registry.ClientModeCLI, registry.ClientModeDaemon},
+			Handler:        summaryHandler(deps),
 		},
 	}
 
@@ -488,6 +497,186 @@ func recordACPResetInteraction(ctx context.Context, deps *ACPCommandDeps) {
 	)
 	task.Input.String = `{"command":"/acp-reset"}`
 	task.Input.Valid = true
+	task.Status = domain.TaskStatusCompleted
+	task.ClientID.String = deps.ActiveSession.GetClientID()
+	task.ClientID.Valid = true
+
+	_ = deps.TaskRepo.Create(ctx, task)
+}
+
+// summaryHandler handles the /summary [task_id] command.
+// It retrieves recent ACP events from the circular buffer for debugging.
+func summaryHandler(deps *ACPCommandDeps) registry.Handler {
+	return func(ctx context.Context, active registry.ActiveSessionInfo, args []string, rawArgs string) (registry.CommandResult, error) {
+		// Check if we have a session.
+		session := deps.ActiveSession.GetSession()
+		if session == nil {
+			return registry.CommandResult{
+				Message: "No active session.",
+				Action:  registry.ActionNone,
+			}, nil
+		}
+
+		// Check if buffer registry is available.
+		if deps.BufferRegistry == nil {
+			return registry.CommandResult{
+				Message: "Event buffer not available.",
+				Action:  registry.ActionNone,
+			}, nil
+		}
+
+		// Determine the task ID.
+		taskID := strings.TrimSpace(rawArgs)
+		acpSessionID := deps.ActiveSession.GetACPSessionID()
+
+		if taskID == "" {
+			// Try to find the most recent active task.
+			if deps.TaskRepo != nil {
+				activeTask, err := deps.TaskRepo.MostRecentActive(ctx, session.ID)
+				if err == nil && activeTask != nil {
+					taskID = activeTask.ID
+				}
+			}
+			// If no active task, fall back to session-default buffer.
+		}
+
+		// Get the snapshot from the buffer.
+		snapshot := deps.BufferRegistry.Snapshot(session.ID, taskID)
+		if len(snapshot) == 0 {
+			if taskID != "" {
+				return registry.CommandResult{
+					Message: fmt.Sprintf("No buffered events for task %s — buffer is in-memory and resets on restart.", taskID),
+					Action:  registry.ActionNone,
+				}, nil
+			}
+			return registry.CommandResult{
+				Message: "No buffered events for this session — buffer is in-memory and resets on restart.",
+				Action:  registry.ActionNone,
+			}, nil
+		}
+
+		// Render the summary.
+		var sb strings.Builder
+		if taskID != "" {
+			fmt.Fprintf(&sb, "<thinking task=%q session=%q>\n", taskID, acpSessionID)
+		} else {
+			fmt.Fprintf(&sb, "<thinking session=%q>\n", acpSessionID)
+		}
+
+		for _, te := range snapshot {
+			line := formatEventLine(te.Timestamp, te.Event)
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
+
+		sb.WriteString("</thinking>")
+
+		// Optionally persist as coordination task (Task 3.10.4).
+		project := deps.ActiveSession.GetProject()
+		if deps.TaskRepo != nil && deps.AgentRepo != nil && project != nil {
+			go recordSummaryInteraction(context.Background(), deps, taskID, sb.String())
+		}
+
+		return registry.CommandResult{
+			Message: sb.String(),
+			Action:  registry.ActionNone,
+		}, nil
+	}
+}
+
+// formatEventLine formats a single event for the summary output.
+// Truncates content to maxContentLen characters.
+func formatEventLine(ts time.Time, ev acp.Event) string {
+	const maxContentLen = 500
+
+	timeStr := ts.Format("15:04:05")
+
+	var content string
+	switch ev.Kind {
+	case acp.EventThinking:
+		content = extractChunkContent(ev.Raw)
+		if content == "" {
+			content = "(thinking)"
+		}
+		return fmt.Sprintf("[%s] thought: %s", timeStr, truncate(content, maxContentLen))
+
+	case acp.EventMessage:
+		content = extractChunkContent(ev.Raw)
+		if content == "" {
+			content = "(message)"
+		}
+		return fmt.Sprintf("[%s] message: %s", timeStr, truncate(content, maxContentLen))
+
+	case acp.EventToolCall:
+		if ev.Command != "" {
+			return fmt.Sprintf("[%s] tool: %s `%s`", timeStr, ev.ToolName, truncate(ev.Command, maxContentLen))
+		}
+		return fmt.Sprintf("[%s] tool: %s", timeStr, ev.ToolName)
+
+	case acp.EventToolUpdate:
+		return fmt.Sprintf("[%s] tool_update: %s", timeStr, ev.ToolName)
+
+	case acp.EventPermissionRequest:
+		if ev.Command != "" {
+			return fmt.Sprintf("[%s] permission_request: %s `%s`", timeStr, ev.ToolName, truncate(ev.Command, maxContentLen))
+		}
+		return fmt.Sprintf("[%s] permission_request: %s", timeStr, ev.ToolName)
+
+	case acp.EventTurnStart:
+		return fmt.Sprintf("[%s] turn_start", timeStr)
+
+	case acp.EventTurnEnd:
+		return fmt.Sprintf("[%s] turn_end", timeStr)
+
+	case acp.EventPlan:
+		return fmt.Sprintf("[%s] plan", timeStr)
+
+	default:
+		return fmt.Sprintf("[%s] %s", timeStr, ev.Kind.String())
+	}
+}
+
+// truncate shortens a string to maxLen characters, appending "…" if truncated.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-1] + "…"
+}
+
+// recordSummaryInteraction records the summary command as a coordination task.
+func recordSummaryInteraction(ctx context.Context, deps *ACPCommandDeps, taskID, markdown string) {
+	project := deps.ActiveSession.GetProject()
+	session := deps.ActiveSession.GetSession()
+	if project == nil || session == nil {
+		return
+	}
+
+	// Get system agent.
+	systemAgent, err := deps.AgentRepo.FindByName(ctx, "System")
+	if err != nil || systemAgent == nil {
+		return
+	}
+
+	// Create coordination task.
+	task := domain.NewTask(
+		project.ID,
+		session.ID,
+		"", // No workflow
+		systemAgent.ID,
+		domain.TaskTypeCoordination,
+	)
+
+	// Build input JSON.
+	if taskID != "" {
+		task.Input.String = fmt.Sprintf(`{"command":"/summary","arg":"%s"}`, taskID)
+	} else {
+		task.Input.String = `{"command":"/summary"}`
+	}
+	task.Input.Valid = true
+
+	task.Output.String = fmt.Sprintf(`{"markdown":%q}`, markdown)
+	task.Output.Valid = true
 	task.Status = domain.TaskStatusCompleted
 	task.ClientID.String = deps.ActiveSession.GetClientID()
 	task.ClientID.Valid = true

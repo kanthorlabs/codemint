@@ -58,4 +58,10 @@ type TaskRepository interface {
 	// by (seq_epic, seq_story, seq_task). Used by the /tasks command to display
 	// task hierarchy with status indicators.
 	ListBySession(ctx context.Context, sessionID string) ([]*domain.Task, error)
+
+	// MostRecentActive returns the most recently active task in the session
+	// that is in Processing (1) or Awaiting (2) status. Used by /summary command
+	// to default to the current active task when no task ID is specified.
+	// Returns nil, nil when no active task exists.
+	MostRecentActive(ctx context.Context, sessionID string) (*domain.Task, error)
 }
