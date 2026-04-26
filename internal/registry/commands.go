@@ -147,6 +147,10 @@ const (
 	// EventACPStream indicates a classified event from the ACP agent stream.
 	// The payload is an acp.Event struct carrying Kind, Raw, etc.
 	EventACPStream UIEventType = "acp_stream"
+	// EventACPAutoApproved indicates a command was auto-approved and executed
+	// based on the project's permission whitelist. The payload contains command
+	// details and execution result for audit purposes.
+	EventACPAutoApproved UIEventType = "acp_auto_approved"
 )
 
 // UIEvent represents a fire-and-forget notification broadcast to all UI
