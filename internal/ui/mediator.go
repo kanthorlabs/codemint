@@ -79,6 +79,20 @@ func (m *UIMediator) ClearScreen() {
 	}
 }
 
+// NotifyAll broadcasts a fire-and-forget event to all registered UI adapters.
+// Events are delivered asynchronously in separate goroutines; the method
+// returns immediately without waiting for adapters to process the event.
+func (m *UIMediator) NotifyAll(event registry.UIEvent) {
+	m.mu.RLock()
+	adapters := make([]UIAdapter, len(m.adapters))
+	copy(adapters, m.adapters)
+	m.mu.RUnlock()
+
+	for _, adapter := range adapters {
+		go adapter.NotifyEvent(event)
+	}
+}
+
 // PromptDecision broadcasts the prompt request to all registered adapters
 // concurrently. The first adapter to respond wins; all other adapters receive
 // a context cancellation signal to dismiss their pending prompts.

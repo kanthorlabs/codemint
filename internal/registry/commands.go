@@ -100,6 +100,38 @@ func (c Command) SupportsMode(mode ClientMode) bool {
 	return slices.Contains(c.SupportedModes, mode)
 }
 
+// UIEventType categorizes the kind of event being broadcast to UI adapters.
+type UIEventType string
+
+const (
+	// EventTaskStarted indicates a task has begun execution.
+	EventTaskStarted UIEventType = "task_started"
+	// EventTaskCompleted indicates a task finished successfully.
+	EventTaskCompleted UIEventType = "task_completed"
+	// EventTaskFailed indicates a task encountered an error.
+	EventTaskFailed UIEventType = "task_failed"
+	// EventAgentCrashed indicates an agent process terminated unexpectedly.
+	EventAgentCrashed UIEventType = "agent_crashed"
+	// EventSessionCreated indicates a new session was created.
+	EventSessionCreated UIEventType = "session_created"
+	// EventProgress indicates an incremental progress update.
+	EventProgress UIEventType = "progress"
+)
+
+// UIEvent represents a fire-and-forget notification broadcast to all UI
+// adapters. Unlike PromptRequest, events do not block waiting for a response.
+type UIEvent struct {
+	// Type categorizes the event (e.g., "task_started", "task_completed").
+	Type UIEventType
+	// TaskID is the task this event relates to (optional, may be empty).
+	TaskID string
+	// Message is a human-readable description for UI rendering.
+	Message string
+	// Payload carries optional structured data for rich UI rendering.
+	// Adapters may type-assert to extract event-specific details.
+	Payload any
+}
+
 // PromptRequest contains the information needed to display a decision prompt
 // to the user across multiple UI adapters.
 type PromptRequest struct {
@@ -122,6 +154,9 @@ type UIMediator interface {
 	RenderMessage(msg string)
 	// ClearScreen resets the visible output area.
 	ClearScreen()
+	// NotifyAll broadcasts a fire-and-forget event to all registered UI adapters.
+	// Events are delivered asynchronously; the method returns immediately.
+	NotifyAll(event UIEvent)
 	// PromptDecision broadcasts a decision prompt to all registered UI adapters
 	// concurrently. The first adapter to respond wins; other adapters receive
 	// context cancellation to dismiss their pending prompts.

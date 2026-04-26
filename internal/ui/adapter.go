@@ -11,6 +11,11 @@ import (
 // UIAdapter defines the interface that all concrete UIs (CLI, Web, Daemon)
 // must implement to participate in the broadcast prompt flow.
 type UIAdapter interface {
+	// NotifyEvent receives a fire-and-forget event notification. Implementations
+	// should handle the event asynchronously (e.g., update progress bars, log
+	// status changes) without blocking the caller.
+	NotifyEvent(event registry.UIEvent)
+
 	// PromptDecision displays a prompt to the user and blocks until the user
 	// selects an option or the context is canceled. Implementations must
 	// dismiss the prompt immediately when ctx is canceled.

@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,6 +15,23 @@ import (
 type FastMockAdapter struct {
 	response registry.PromptResponse
 	called   atomic.Bool
+	// events stores received UIEvent notifications for test assertions.
+	events   []registry.UIEvent
+	eventsMu sync.Mutex
+}
+
+func (a *FastMockAdapter) NotifyEvent(event registry.UIEvent) {
+	a.eventsMu.Lock()
+	defer a.eventsMu.Unlock()
+	a.events = append(a.events, event)
+}
+
+func (a *FastMockAdapter) Events() []registry.UIEvent {
+	a.eventsMu.Lock()
+	defer a.eventsMu.Unlock()
+	result := make([]registry.UIEvent, len(a.events))
+	copy(result, a.events)
+	return result
 }
 
 func (a *FastMockAdapter) PromptDecision(ctx context.Context, req registry.PromptRequest) registry.PromptResponse {
@@ -32,6 +50,23 @@ type SlowMockAdapter struct {
 	called    atomic.Bool
 	canceled  atomic.Bool
 	cancelErr error
+	// events stores received UIEvent notifications for test assertions.
+	events   []registry.UIEvent
+	eventsMu sync.Mutex
+}
+
+func (a *SlowMockAdapter) NotifyEvent(event registry.UIEvent) {
+	a.eventsMu.Lock()
+	defer a.eventsMu.Unlock()
+	a.events = append(a.events, event)
+}
+
+func (a *SlowMockAdapter) Events() []registry.UIEvent {
+	a.eventsMu.Lock()
+	defer a.eventsMu.Unlock()
+	result := make([]registry.UIEvent, len(a.events))
+	copy(result, a.events)
+	return result
 }
 
 func (a *SlowMockAdapter) PromptDecision(ctx context.Context, req registry.PromptRequest) registry.PromptResponse {
@@ -218,4 +253,128 @@ func TestUIMediator_ImplementsRegistryUIMediator(t *testing.T) {
 	// This assignment will fail to compile if UIMediator doesn't implement
 	// registry.UIMediator.
 	var _ registry.UIMediator = m
+}
+
+// Compile-time check that mock adapters implement UIAdapter.
+var (
+	_ UIAdapter = (*FastMockAdapter)(nil)
+	_ UIAdapter = (*SlowMockAdapter)(nil)
+)
+
+func TestUIMediator_NotifyAll_BroadcastsToAllAdapters(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewUIMediator(&buf)
+
+	fast := &FastMockAdapter{response: registry.PromptResponse{SelectedOption: "Accept"}}
+	slow := &SlowMockAdapter{response: registry.PromptResponse{SelectedOption: "Revert"}}
+
+	m.RegisterAdapter(fast)
+	m.RegisterAdapter(slow)
+
+	event := registry.UIEvent{
+		Type:    registry.EventTaskStarted,
+		TaskID:  "task-123",
+		Message: "Task execution started",
+		Payload: map[string]string{"priority": "high"},
+	}
+
+	m.NotifyAll(event)
+
+	// Give goroutines time to process the event.
+	time.Sleep(20 * time.Millisecond)
+
+	// Both adapters should have received the event.
+	fastEvents := fast.Events()
+	if len(fastEvents) != 1 {
+		t.Errorf("fast adapter: expected 1 event, got %d", len(fastEvents))
+	} else {
+		if fastEvents[0].Type != registry.EventTaskStarted {
+			t.Errorf("fast adapter: expected EventTaskStarted, got %v", fastEvents[0].Type)
+		}
+		if fastEvents[0].TaskID != "task-123" {
+			t.Errorf("fast adapter: expected task-123, got %q", fastEvents[0].TaskID)
+		}
+	}
+
+	slowEvents := slow.Events()
+	if len(slowEvents) != 1 {
+		t.Errorf("slow adapter: expected 1 event, got %d", len(slowEvents))
+	} else {
+		if slowEvents[0].Type != registry.EventTaskStarted {
+			t.Errorf("slow adapter: expected EventTaskStarted, got %v", slowEvents[0].Type)
+		}
+	}
+}
+
+func TestUIMediator_NotifyAll_NoAdapters(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewUIMediator(&buf)
+
+	// Should not panic with no adapters.
+	event := registry.UIEvent{
+		Type:    registry.EventTaskCompleted,
+		TaskID:  "task-456",
+		Message: "Task completed",
+	}
+
+	m.NotifyAll(event) // Should complete without error.
+}
+
+func TestUIMediator_NotifyAll_MultipleEvents(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewUIMediator(&buf)
+
+	fast := &FastMockAdapter{response: registry.PromptResponse{SelectedOption: "Accept"}}
+	m.RegisterAdapter(fast)
+
+	events := []registry.UIEvent{
+		{Type: registry.EventTaskStarted, TaskID: "task-1", Message: "Started"},
+		{Type: registry.EventProgress, TaskID: "task-1", Message: "50% complete"},
+		{Type: registry.EventTaskCompleted, TaskID: "task-1", Message: "Done"},
+	}
+
+	for _, e := range events {
+		m.NotifyAll(e)
+	}
+
+	// Give goroutines time to process all events.
+	time.Sleep(30 * time.Millisecond)
+
+	received := fast.Events()
+	if len(received) != 3 {
+		t.Errorf("expected 3 events, got %d", len(received))
+	}
+}
+
+func TestUIMediator_NotifyAll_FireAndForget(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewUIMediator(&buf)
+
+	// Create a slow adapter that takes time to process events.
+	slow := &SlowMockAdapter{response: registry.PromptResponse{SelectedOption: "Revert"}}
+	m.RegisterAdapter(slow)
+
+	event := registry.UIEvent{
+		Type:    registry.EventAgentCrashed,
+		TaskID:  "task-error",
+		Message: "Agent crashed unexpectedly",
+	}
+
+	start := time.Now()
+	m.NotifyAll(event)
+	elapsed := time.Since(start)
+
+	// NotifyAll should return immediately (fire-and-forget).
+	// It should not block waiting for the adapter to process.
+	if elapsed > 10*time.Millisecond {
+		t.Errorf("NotifyAll blocked for %v, expected immediate return", elapsed)
+	}
+
+	// Give slow adapter time to receive.
+	time.Sleep(20 * time.Millisecond)
+
+	received := slow.Events()
+	if len(received) != 1 {
+		t.Errorf("expected 1 event, got %d", len(received))
+	}
 }

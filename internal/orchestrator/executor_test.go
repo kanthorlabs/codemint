@@ -66,8 +66,9 @@ type mockUI struct {
 	lastMessage string
 }
 
-func (m *mockUI) RenderMessage(msg string) { m.lastMessage = msg }
-func (m *mockUI) ClearScreen()             {}
+func (m *mockUI) RenderMessage(msg string)        { m.lastMessage = msg }
+func (m *mockUI) ClearScreen()                    {}
+func (m *mockUI) NotifyAll(_ registry.UIEvent)    {}
 func (m *mockUI) PromptDecision(_ context.Context, _ registry.PromptRequest) registry.PromptResponse {
 	return registry.PromptResponse{}
 }
