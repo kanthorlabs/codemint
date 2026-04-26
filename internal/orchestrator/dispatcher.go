@@ -22,10 +22,11 @@ var ErrShutdownGracefully = registry.ErrShutdownGracefully
 // Dispatcher routes user input to slash-command handlers or the appropriate
 // AI assistant path depending on the current ActiveSession.
 type Dispatcher struct {
-	registry         *registry.CommandRegistry
-	ui               registry.UIMediator
-	systemAssistant  func(ctx context.Context, input string) error
-	workflowRegistry *workflow.WorkflowRegistry
+	registry            *registry.CommandRegistry
+	ui                  registry.UIMediator
+	systemAssistant     func(ctx context.Context, input string) error
+	workflowRegistry    *workflow.WorkflowRegistry
+	interactionRecorder *InteractionRecorder
 }
 
 // NewDispatcher constructs a Dispatcher backed by the given registry and UI
@@ -44,6 +45,11 @@ func NewDispatcher(
 		systemAssistant:  systemAssistant,
 		workflowRegistry: workflowRegistry,
 	}
+}
+
+// SetInteractionRecorder sets the interaction recorder for persisting user commands.
+func (d *Dispatcher) SetInteractionRecorder(recorder *InteractionRecorder) {
+	d.interactionRecorder = recorder
 }
 
 // WorkflowRegistry returns the workflow registry associated with this dispatcher.
@@ -78,17 +84,24 @@ func (d *Dispatcher) Dispatch(ctx context.Context, active *ActiveSession, input 
 			if d.ui != nil {
 				d.ui.RenderMessage(msg)
 			}
+			// Record the blocked command attempt.
+			d.recordInteraction(ctx, active, input, true, cmd, msg, nil)
 			return nil // handled gracefully; not a failure
 		}
 
 		result, err := c.Handler(ctx, active, args, rawArgs)
 		if err != nil {
+			// Record the failed command.
+			d.recordInteraction(ctx, active, input, true, cmd, "", err)
 			return err
 		}
 
 		if result.Message != "" && d.ui != nil {
 			d.ui.RenderMessage(result.Message)
 		}
+
+		// Record the successful command.
+		d.recordInteraction(ctx, active, input, true, cmd, result.Message, nil)
 
 		switch result.Action {
 		case registry.ActionExit:
@@ -125,6 +138,13 @@ func (d *Dispatcher) Dispatch(ctx context.Context, active *ActiveSession, input 
 
 	// Fallback: hand off to Brainstormer placeholder (EPIC-02).
 	return fmt.Errorf("%w: input=%q", ErrNoBrainstormer, rawArgs)
+}
+
+// recordInteraction records a user interaction as a Coordination task.
+func (d *Dispatcher) recordInteraction(ctx context.Context, active *ActiveSession, input string, isSlash bool, cmdName string, response string, err error) {
+	if d.interactionRecorder != nil {
+		d.interactionRecorder.Record(ctx, active, input, isSlash, cmdName, response, err)
+	}
 }
 
 // handleWorkflow routes input to the appropriate workflow handler.

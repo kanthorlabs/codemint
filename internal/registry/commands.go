@@ -75,6 +75,22 @@ type ActiveSessionInfo interface {
 	GetIsGlobal() bool
 }
 
+// MutableSessionInfo extends ActiveSessionInfo with methods to modify session state.
+// Used by commands that need to switch sessions or update session ownership.
+type MutableSessionInfo interface {
+	ActiveSessionInfo
+	// GetSessionID returns the current session ID, or empty if global mode.
+	GetSessionID() string
+	// GetClientID returns the unique identifier for this client instance.
+	GetClientID() string
+	// SetSession updates the active session and project.
+	SetSession(session any, project any, yoloEnabled bool)
+	// SetSuspended marks the session as suspended (another client took over).
+	SetSuspended(suspended bool)
+	// SetClientMode changes the runtime mode (cli or daemon).
+	SetClientMode(mode ClientMode)
+}
+
 // Handler is the unified signature for all slash-command implementations.
 // active provides read-only session context; args are shell-tokenised
 // arguments; rawArgs is the untouched argument string for System Assistant
@@ -122,6 +138,12 @@ const (
 	EventSessionCreated UIEventType = "session_created"
 	// EventProgress indicates an incremental progress update.
 	EventProgress UIEventType = "progress"
+	// EventSessionTakeover indicates another client has taken over the session.
+	// The payload contains the new owner's client ID.
+	EventSessionTakeover UIEventType = "session_takeover"
+	// EventSessionReclaimed indicates a suspended client has reclaimed the session.
+	// The payload contains the reclaiming client's ID.
+	EventSessionReclaimed UIEventType = "session_reclaimed"
 )
 
 // UIEvent represents a fire-and-forget notification broadcast to all UI

@@ -131,9 +131,11 @@ type Agent struct {
 
 // Session is a single execution instance tied to a project.
 type Session struct {
-	ID        string        `db:"id"`
-	ProjectID string        `db:"project_id"`
-	Status    SessionStatus `db:"status"`
+	ID             string         `db:"id"`
+	ProjectID      string         `db:"project_id"`
+	Status         SessionStatus  `db:"status"`
+	ActiveClient   sql.NullString `db:"active_client"`    // Format: "{mode}:{uuid}" e.g. "cli:abc123"
+	LastActivityAt sql.NullInt64  `db:"last_activity_at"` // Unix timestamp (seconds)
 }
 
 // Workflow groups a set of related tasks within a session.
@@ -164,9 +166,10 @@ type Task struct {
 	// Timeout is the maximum duration in milliseconds the agent is allowed to
 	// run before the process is killed and the task is transitioned to Failure.
 	// Defaults to DefaultTaskTimeout (1 hour) when not explicitly set.
-	Timeout int64          `db:"timeout"`
-	Input   sql.NullString `db:"input"`
-	Output  sql.NullString `db:"output"`
+	Timeout  int64          `db:"timeout"`
+	Input    sql.NullString `db:"input"`
+	Output   sql.NullString `db:"output"`
+	ClientID sql.NullString `db:"client_id"` // Format: "{mode}:{uuid}", NULL for AI-created tasks
 }
 
 // --- Null Helpers ---

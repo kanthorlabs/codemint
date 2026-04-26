@@ -9,6 +9,9 @@ import (
 // TaskRepository defines atomic persistence operations for Task entities,
 // enforcing the task state machine transitions defined in User Story 1.5.
 type TaskRepository interface {
+	// Create inserts a new task into the repository.
+	Create(ctx context.Context, t *domain.Task) error
+
 	// Next returns the first actionable task in the given session, ordered
 	// by (seq_epic, seq_story, seq_task) ASC. Only tasks with status
 	// Pending (0) or Awaiting (2) are considered.
@@ -44,4 +47,10 @@ type TaskRepository interface {
 	// UpdateAssignee reassigns a task to a different agent. This is used by the
 	// crash fallback flow (Story 1.9) to hand a failed task back to the human.
 	UpdateAssignee(ctx context.Context, taskID string, assigneeID string) error
+
+	// ListCoordinationAfter returns all Coordination tasks (type=3) in the session
+	// with IDs greater than afterTaskID, ordered by ID (ascending).
+	// Used to show "missed activity" when a client reclaims a session.
+	// If afterTaskID is empty, returns all Coordination tasks.
+	ListCoordinationAfter(ctx context.Context, sessionID string, afterTaskID string) ([]*domain.Task, error)
 }

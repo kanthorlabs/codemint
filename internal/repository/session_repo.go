@@ -34,4 +34,19 @@ type SessionRepository interface {
 
 	// ListByProjectID returns all sessions for a project, ordered by ID (creation order).
 	ListByProjectID(ctx context.Context, projectID string) ([]*domain.Session, error)
+
+	// SaveState updates the session's active_client and last_activity_at columns.
+	// Used for client ownership tracking and heartbeat updates.
+	SaveState(ctx context.Context, sessionID, activeClient string, lastActivityAt int64) error
+
+	// GetMostRecentActive returns the most recently active session across all projects.
+	// Returns nil, nil if no active sessions exist.
+	GetMostRecentActive(ctx context.Context) (*domain.Session, error)
+
+	// ClearOwnership sets active_client to NULL for the given session.
+	// Used when a client releases a session or switches to another session.
+	ClearOwnership(ctx context.Context, sessionID string) error
+
+	// ListActive returns all active sessions (status=0) ordered by last_activity_at descending.
+	ListActive(ctx context.Context) ([]*domain.Session, error)
 }

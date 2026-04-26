@@ -49,6 +49,12 @@ func (m *mockTaskRepo) UpdateAssignee(_ context.Context, _ string, assigneeID st
 	m.newAssigneeID = assigneeID
 	return nil
 }
+func (m *mockTaskRepo) Create(_ context.Context, _ *domain.Task) error {
+	return nil
+}
+func (m *mockTaskRepo) ListCoordinationAfter(_ context.Context, _ string, _ string) ([]*domain.Task, error) {
+	return nil, nil
+}
 
 type mockAgentRepo struct {
 	human *domain.Agent

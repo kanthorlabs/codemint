@@ -29,8 +29,8 @@ var _ repository.SessionRepository = (*sessionRepo)(nil)
 // The partial unique index idx_active_session enforces at most one active session per project.
 // Returns ErrActiveSessionExists if the project already has an active session.
 func (r *sessionRepo) Create(ctx context.Context, s *domain.Session) error {
-	const query = `INSERT INTO session (id, project_id, status) VALUES (?, ?, ?)`
-	_, err := r.db.ExecContext(ctx, query, s.ID, s.ProjectID, int(s.Status))
+	const query = `INSERT INTO session (id, project_id, status, active_client, last_activity_at) VALUES (?, ?, ?, ?, ?)`
+	_, err := r.db.ExecContext(ctx, query, s.ID, s.ProjectID, int(s.Status), s.ActiveClient, s.LastActivityAt)
 	if err != nil {
 		// SQLite returns "UNIQUE constraint failed" for the partial index violation.
 		if isUniqueConstraintError(err) {
@@ -45,7 +45,7 @@ func (r *sessionRepo) Create(ctx context.Context, s *domain.Session) error {
 // Returns nil, nil when no matching row exists.
 func (r *sessionRepo) FindByID(ctx context.Context, id string) (*domain.Session, error) {
 	var s domain.Session
-	err := r.db.GetContext(ctx, &s, `SELECT id, project_id, status FROM session WHERE id = ?`, id)
+	err := r.db.GetContext(ctx, &s, `SELECT id, project_id, status, active_client, last_activity_at FROM session WHERE id = ?`, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -60,7 +60,7 @@ func (r *sessionRepo) FindByID(ctx context.Context, id string) (*domain.Session,
 func (r *sessionRepo) FindActiveByProjectID(ctx context.Context, projectID string) (*domain.Session, error) {
 	var s domain.Session
 	err := r.db.GetContext(ctx, &s,
-		`SELECT id, project_id, status FROM session WHERE project_id = ? AND status = ?`,
+		`SELECT id, project_id, status, active_client, last_activity_at FROM session WHERE project_id = ? AND status = ?`,
 		projectID, int(domain.SessionStatusActive))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -95,10 +95,83 @@ func (r *sessionRepo) Archive(ctx context.Context, id string) error {
 func (r *sessionRepo) ListByProjectID(ctx context.Context, projectID string) ([]*domain.Session, error) {
 	var sessions []*domain.Session
 	err := r.db.SelectContext(ctx, &sessions,
-		`SELECT id, project_id, status FROM session WHERE project_id = ? ORDER BY id`,
+		`SELECT id, project_id, status, active_client, last_activity_at FROM session WHERE project_id = ? ORDER BY id`,
 		projectID)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: list sessions for project %q: %w", projectID, err)
+	}
+	return sessions, nil
+}
+
+// SaveState updates the session's active_client and last_activity_at columns.
+// Used for client ownership tracking and heartbeat updates.
+func (r *sessionRepo) SaveState(ctx context.Context, sessionID, activeClient string, lastActivityAt int64) error {
+	const query = `UPDATE session SET active_client = ?, last_activity_at = ? WHERE id = ?`
+	result, err := r.db.ExecContext(ctx, query, activeClient, lastActivityAt, sessionID)
+	if err != nil {
+		return fmt.Errorf("sqlite: save session state %q: %w", sessionID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: save session state %q: %w", sessionID, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("sqlite: session %q not found", sessionID)
+	}
+	return nil
+}
+
+// GetMostRecentActive returns the most recently active session across all projects.
+// Returns nil, nil if no active sessions exist.
+func (r *sessionRepo) GetMostRecentActive(ctx context.Context) (*domain.Session, error) {
+	var s domain.Session
+	const query = `
+		SELECT id, project_id, status, active_client, last_activity_at 
+		FROM session 
+		WHERE status = ? 
+		ORDER BY last_activity_at DESC NULLS LAST 
+		LIMIT 1
+	`
+	err := r.db.GetContext(ctx, &s, query, int(domain.SessionStatusActive))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("sqlite: get most recent active session: %w", err)
+	}
+	return &s, nil
+}
+
+// ClearOwnership sets active_client to NULL for the given session.
+// Used when a client releases a session or switches to another session.
+func (r *sessionRepo) ClearOwnership(ctx context.Context, sessionID string) error {
+	const query = `UPDATE session SET active_client = NULL WHERE id = ?`
+	result, err := r.db.ExecContext(ctx, query, sessionID)
+	if err != nil {
+		return fmt.Errorf("sqlite: clear session ownership %q: %w", sessionID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: clear session ownership %q: %w", sessionID, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("sqlite: session %q not found", sessionID)
+	}
+	return nil
+}
+
+// ListActive returns all active sessions (status=0) ordered by last_activity_at descending.
+func (r *sessionRepo) ListActive(ctx context.Context) ([]*domain.Session, error) {
+	var sessions []*domain.Session
+	const query = `
+		SELECT id, project_id, status, active_client, last_activity_at 
+		FROM session 
+		WHERE status = ? 
+		ORDER BY last_activity_at DESC NULLS LAST
+	`
+	err := r.db.SelectContext(ctx, &sessions, query, int(domain.SessionStatusActive))
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: list active sessions: %w", err)
 	}
 	return sessions, nil
 }

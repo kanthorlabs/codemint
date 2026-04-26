@@ -113,6 +113,8 @@ func run() error {
 	// Step 5: Create repositories with the DB connection.
 	agentRepo := sqlite.NewAgentRepo(dbConn)
 	taskRepo := sqlite.NewTaskRepo(dbConn)
+	sessionRepo := sqlite.NewSessionRepo(dbConn)
+	projectRepo := sqlite.NewProjectRepo(dbConn)
 
 	// Step 6: Seed system agents.
 	if err := agentRepo.EnsureSystemAgents(ctx); err != nil {
@@ -147,15 +149,46 @@ func run() error {
 	// Step 10: Create dispatcher (no system assistant yet - EPIC-02).
 	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil, workflowReg)
 
-	// Step 11: Create active session (global mode by default).
-	activeSession := &orchestrator.ActiveSession{
-		ClientMode: clientMode,
-		IsGlobal:   true,
-		Project:    nil,
-		Session:    nil,
+	// Set up interaction recorder for persisting user commands as Coordination tasks.
+	interactionRecorder := orchestrator.NewInteractionRecorder(taskRepo, agentRepo)
+	dispatcher.SetInteractionRecorder(interactionRecorder)
+
+	// Step 11: Auto-load most recent active session.
+	sessionLoader := orchestrator.NewSessionLoader(sessionRepo, projectRepo)
+	loadResult, err := sessionLoader.LoadMostRecentSession(ctx, clientMode)
+	if err != nil {
+		return fmt.Errorf("load session: %w", err)
 	}
 
-	// Step 12: Create dispatcher wrapper for REPL loop.
+	// Create active session from load result.
+	activeSession := sessionLoader.CreateActiveSession(loadResult, clientMode)
+
+	// Register session commands (needs active session).
+	sessionCmdDeps := &repl.SessionCommandDeps{
+		SessionRepo:   sessionRepo,
+		ProjectRepo:   projectRepo,
+		TaskRepo:      taskRepo,
+		ActiveSession: activeSession,
+	}
+	if err := repl.RegisterSessionCommands(cmdRegistry, sessionCmdDeps); err != nil {
+		return fmt.Errorf("register session commands: %w", err)
+	}
+
+	// Register mode commands.
+	modeCmdDeps := &repl.ModeCommandDeps{
+		ActiveSession: activeSession,
+	}
+	if err := repl.RegisterModeCommands(cmdRegistry, modeCmdDeps); err != nil {
+		return fmt.Errorf("register mode commands: %w", err)
+	}
+
+	// Step 12: Start heartbeat goroutine if we have an active session.
+	if activeSession.Session != nil {
+		heartbeat := orchestrator.NewHeartbeat(sessionRepo, activeSession)
+		go heartbeat.Start(ctx)
+	}
+
+	// Step 13: Create dispatcher wrapper for REPL loop.
 	wrapper := &dispatcherWrapper{
 		dispatcher: dispatcher,
 		session:    activeSession,
@@ -165,6 +198,10 @@ func run() error {
 	fmt.Println("CodeMint - AI-powered coding assistant")
 	fmt.Printf("Version: %s (commit: %s)\n", version, commit)
 	fmt.Println("Type /help for available commands, /exit to quit.")
+	fmt.Println()
+
+	// Display session status.
+	fmt.Println(loadResult.Message)
 	fmt.Println()
 
 	// The REPL loop handles shutdown via ErrShutdownGracefully.
