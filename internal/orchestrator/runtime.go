@@ -4,6 +4,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -34,6 +35,11 @@ type Runtime struct {
 
 	// Logger for runtime operations.
 	logger *slog.Logger
+
+	// YoloAgentID is the cached ID of the sys-auto-approve agent.
+	// Used by the Executor to detect YOLO auto-approval tasks.
+	// Task 3.16.1: Cache sys-auto-approve Agent ID.
+	YoloAgentID string
 
 	// consumers tracks active pipeline consumers per session.
 	// Key: sessionID, Value: consumer context cancel function.
@@ -83,10 +89,27 @@ type RuntimeConfig struct {
 
 // NewRuntime creates a new Runtime with the provided configuration.
 // All required fields in RuntimeConfig must be non-nil.
-func NewRuntime(cfg RuntimeConfig) *Runtime {
+//
+// Task 3.16.1: Loads the sys-auto-approve agent ID at startup and caches it.
+// Returns an error if the agent is not seeded — this catches a corrupted DB
+// before tasks start running and silently mis-routing.
+func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
+	}
+
+	// Task 3.16.1: Look up the YOLO agent once at startup.
+	var yoloAgentID string
+	if cfg.AgentRepo != nil {
+		yolo, err := cfg.AgentRepo.FindByName(ctx, "sys-auto-approve")
+		if err != nil {
+			return nil, fmt.Errorf("runtime: sys-auto-approve agent missing — re-run agent seeding: %w", err)
+		}
+		if yolo == nil {
+			return nil, fmt.Errorf("runtime: sys-auto-approve agent missing — re-run agent seeding")
+		}
+		yoloAgentID = yolo.ID
 	}
 
 	return &Runtime{
@@ -98,12 +121,13 @@ func NewRuntime(cfg RuntimeConfig) *Runtime {
 		agentRepo:      cfg.AgentRepo,
 		mediator:       cfg.Mediator,
 		logger:         logger,
+		YoloAgentID:    yoloAgentID,
 		consumers:      make(map[string]context.CancelFunc),
 		interceptors:   make(map[string]*Interceptor),
 		pipelines:      make(map[string]*acp.Pipeline),
 		statusMappers:  make(map[string]*StatusMapper),
 		advanceCh:      cfg.AdvanceCh,
-	}
+	}, nil
 }
 
 // Registry returns the underlying ACP worker registry.

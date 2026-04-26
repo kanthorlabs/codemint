@@ -28,11 +28,15 @@ func TestRuntime_E2E_EventFlow(t *testing.T) {
 	}
 
 	// Create the runtime without a real registry (we'll test the pipeline directly).
-	rt := NewRuntime(RuntimeConfig{
+	rt, err := NewRuntime(context.Background(), RuntimeConfig{
 		Registry:       acp.NewRegistry(acp.DefaultConfig()),
 		BufferRegistry: bufferRegistry,
 		Mediator:       uiMediatorMock,
+		AgentRepo:      newTestAgentRepo(),
 	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
 
 	sessionID := "e2e-test-session"
 	taskID := "e2e-test-task"

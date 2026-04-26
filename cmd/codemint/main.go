@@ -186,7 +186,7 @@ func run() error {
 	permissionRepo := sqlite.NewProjectPermissionRepo(dbConn)
 	bufferRegistry := acp.NewBufferRegistry(acp.DefaultBufferCapacity)
 
-	acpRuntime := orchestrator.NewRuntime(orchestrator.RuntimeConfig{
+	acpRuntime, err := orchestrator.NewRuntime(ctx, orchestrator.RuntimeConfig{
 		Registry:       acpRegistry,
 		BufferRegistry: bufferRegistry,
 		Mediator:       mediator,
@@ -195,6 +195,9 @@ func run() error {
 		SessionRepo:    sessionRepo,
 		AgentRepo:      agentRepo,
 	})
+	if err != nil {
+		log.Fatalf("Failed to create ACP runtime: %v", err)
+	}
 
 	activeSession.SetACPRegistry(acpRegistry)
 	activeSession.SetACPRuntime(acpRuntime)

@@ -73,13 +73,17 @@ func (m *mockTaskRepo) MostRecentActive(_ context.Context, _ string) (*domain.Ta
 }
 
 type mockAgentRepo struct {
-	human *domain.Agent
+	human       *domain.Agent
+	autoApprove *domain.Agent
 }
 
 func (m *mockAgentRepo) EnsureSystemAgents(_ context.Context) error { return nil }
 func (m *mockAgentRepo) FindByName(_ context.Context, name string) (*domain.Agent, error) {
 	if name == "human" && m.human != nil {
 		return m.human, nil
+	}
+	if name == "sys-auto-approve" && m.autoApprove != nil {
+		return m.autoApprove, nil
 	}
 	return nil, nil
 }
@@ -1070,15 +1074,18 @@ func createTestRuntimeWithMockWorker(sessionID string, taskRepo repository.TaskR
 	bufferRegistry := acp.NewBufferRegistry(100)
 
 	// Create runtime
-	runtime := NewRuntime(RuntimeConfig{
+	runtime, err := NewRuntime(context.Background(), RuntimeConfig{
 		Registry:       acpRegistry,
 		BufferRegistry: bufferRegistry,
 		Mediator:       ui,
 		TaskRepo:       taskRepo,
 		PermissionRepo: &mockPermissionRepo{},
 		SessionRepo:    &mockSessionRepo{},
-		AgentRepo:      &mockAgentRepo{},
+		AgentRepo:      &mockAgentRepo{autoApprove: &domain.Agent{ID: "yolo-agent-id", Name: "sys-auto-approve", Type: domain.AgentTypeSystem}},
 	})
+	if err != nil {
+		panic("failed to create runtime: " + err.Error())
+	}
 
 	cleanup := func() {
 		workerCleanup()
@@ -1410,5 +1417,317 @@ func TestExecutor_Coding_EmptyInputFailsGracefully(t *testing.T) {
 
 	if failureOutput.Error != FailureSentinelInvalidInput {
 		t.Errorf("expected sentinel %q, got %q", FailureSentinelInvalidInput, failureOutput.Error)
+	}
+}
+
+// --- Task 3.16: YOLO Auto-Approval Bypass Tests ---
+
+// TestExecutor_Confirmation_AutoApproved verifies that Confirmation tasks assigned
+// to sys-auto-approve are bypassed without prompting the user.
+func TestExecutor_Confirmation_AutoApproved(t *testing.T) {
+	// Create mock dependencies.
+	repo := &mockTaskRepo{}
+	ui := &mockUI{}
+
+	// Create executor.
+	executor := NewExecutorWithConfig(ExecutorConfig{
+		TaskRepo:  repo,
+		AgentRepo: &mockAgentRepo{},
+		UI:        ui,
+	})
+
+	// Create runtime with YOLO agent ID.
+	yoloAgentID := "sys-auto-approve-agent-id"
+	runtime, err := NewRuntime(context.Background(), RuntimeConfig{
+		Registry:       acp.NewRegistry(acp.DefaultConfig()),
+		BufferRegistry: acp.NewBufferRegistry(100),
+		AgentRepo:      &mockAgentRepo{autoApprove: &domain.Agent{ID: yoloAgentID, Name: "sys-auto-approve", Type: domain.AgentTypeSystem}},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
+
+	// Create session with runtime.
+	sess := &ActiveSession{
+		acpRuntime: runtime,
+	}
+
+	// Create a Confirmation task assigned to YOLO agent.
+	task := &domain.Task{
+		ID:         idgen.MustNew(),
+		Type:       domain.TaskTypeConfirmation,
+		AssigneeID: yoloAgentID,
+		SeqEpic:    1,
+		SeqStory:   2,
+		Input:      domain.NewNullString(`{"prompt":"Review changes"}`),
+	}
+
+	// Execute.
+	err = executor.Execute(context.Background(), sess, task)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	// Verify PromptDecision was NOT called (auto-approval bypassed it).
+	if ui.promptRequestCalled {
+		t.Error("PromptDecision should NOT be called for auto-approved task")
+	}
+
+	// Verify task status was set to Success.
+	found := false
+	for _, status := range repo.updateStatusCalls {
+		if status == domain.TaskStatusSuccess {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Task should be marked as Success")
+	}
+
+	// Verify output JSON contains auto_approved marker.
+	if !task.Output.Valid {
+		t.Fatal("Task output should be set")
+	}
+	var output map[string]string
+	if err := json.Unmarshal([]byte(task.Output.String), &output); err != nil {
+		t.Fatalf("Failed to parse output JSON: %v", err)
+	}
+	if output["auto_approved"] != "true" {
+		t.Errorf("Expected auto_approved=true, got %q", output["auto_approved"])
+	}
+	if output["agent"] != "sys-auto-approve" {
+		t.Errorf("Expected agent=sys-auto-approve, got %q", output["agent"])
+	}
+
+	// Verify UI event was emitted.
+	found = false
+	for _, ev := range ui.notifyAllCalls {
+		if ev.Type == registry.EventYoloAutoApproved {
+			found = true
+			payload, ok := ev.Payload.(registry.YoloAutoApprovedPayload)
+			if !ok {
+				t.Error("Payload should be YoloAutoApprovedPayload")
+			}
+			if payload.TaskID != task.ID {
+				t.Errorf("Payload TaskID = %q, want %q", payload.TaskID, task.ID)
+			}
+			if payload.SeqStory != 2 {
+				t.Errorf("Payload SeqStory = %d, want 2", payload.SeqStory)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("EventYoloAutoApproved should be emitted")
+	}
+}
+
+// TestExecutor_Retrospective_AutoApprovedSkipsFreeform verifies that Retrospective
+// tasks assigned to sys-auto-approve skip the freeform prompt.
+func TestExecutor_Retrospective_AutoApprovedSkipsFreeform(t *testing.T) {
+	// Create mock dependencies.
+	repo := &mockTaskRepo{}
+	ui := &mockUI{}
+
+	// Create executor.
+	executor := NewExecutorWithConfig(ExecutorConfig{
+		TaskRepo:  repo,
+		AgentRepo: &mockAgentRepo{},
+		UI:        ui,
+	})
+
+	// Create runtime with YOLO agent ID.
+	yoloAgentID := "sys-auto-approve-agent-id"
+	runtime, err := NewRuntime(context.Background(), RuntimeConfig{
+		Registry:       acp.NewRegistry(acp.DefaultConfig()),
+		BufferRegistry: acp.NewBufferRegistry(100),
+		AgentRepo:      &mockAgentRepo{autoApprove: &domain.Agent{ID: yoloAgentID, Name: "sys-auto-approve", Type: domain.AgentTypeSystem}},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
+
+	// Create session with runtime.
+	sess := &ActiveSession{
+		acpRuntime: runtime,
+	}
+
+	// Create a Retrospective task assigned to YOLO agent.
+	task := &domain.Task{
+		ID:         idgen.MustNew(),
+		Type:       domain.TaskTypeRetrospective,
+		AssigneeID: yoloAgentID,
+		SeqEpic:    1,
+		SeqStory:   0,
+	}
+
+	// Execute.
+	err = executor.Execute(context.Background(), sess, task)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	// Verify PromptDecision was NOT called (freeform prompt skipped).
+	if ui.promptRequestCalled {
+		t.Error("PromptDecision should NOT be called for auto-approved retrospective")
+	}
+
+	// Verify task status was set to Success.
+	found := false
+	for _, status := range repo.updateStatusCalls {
+		if status == domain.TaskStatusSuccess {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Task should be marked as Success")
+	}
+
+	// Verify UI event was emitted.
+	found = false
+	for _, ev := range ui.notifyAllCalls {
+		if ev.Type == registry.EventYoloAutoApproved {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("EventYoloAutoApproved should be emitted for retrospective")
+	}
+}
+
+// TestExecutor_Coding_IgnoresYoloAssignee verifies that Coding tasks with YOLO
+// assignee still run the ACP path (YOLO only changes approval gates).
+func TestExecutor_Coding_IgnoresYoloAssignee(t *testing.T) {
+	// This test verifies the warning is logged but execution proceeds normally.
+	// The actual execution would fail without a full ACP setup, so we just
+	// verify the task type routing still happens.
+
+	// Create mock dependencies.
+	repo := &mockTaskRepo{}
+	ui := &mockUI{}
+
+	// Create executor.
+	executor := NewExecutorWithConfig(ExecutorConfig{
+		TaskRepo:  repo,
+		AgentRepo: &mockAgentRepo{},
+		UI:        ui,
+	})
+
+	// Create runtime with YOLO agent ID.
+	yoloAgentID := "sys-auto-approve-agent-id"
+	runtime, err := NewRuntime(context.Background(), RuntimeConfig{
+		Registry:       acp.NewRegistry(acp.DefaultConfig()),
+		BufferRegistry: acp.NewBufferRegistry(100),
+		AgentRepo:      &mockAgentRepo{autoApprove: &domain.Agent{ID: yoloAgentID, Name: "sys-auto-approve", Type: domain.AgentTypeSystem}},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
+
+	// Create session with runtime (but no ACP worker - will fail at execution).
+	sess := &ActiveSession{
+		acpRuntime: runtime,
+	}
+
+	// Create a Coding task assigned to YOLO agent.
+	task := &domain.Task{
+		ID:         idgen.MustNew(),
+		Type:       domain.TaskTypeCoding,
+		AssigneeID: yoloAgentID,
+		Input:      domain.NewNullString(`{"prompt":"test"}`),
+		Timeout:    1000,
+	}
+
+	// Execute - will fail because no ACP worker, but the point is it
+	// doesn't auto-approve and tries to run the coding path.
+	_ = executor.Execute(context.Background(), sess, task)
+
+	// Verify no auto-approval event was emitted.
+	for _, ev := range ui.notifyAllCalls {
+		if ev.Type == registry.EventYoloAutoApproved {
+			t.Error("EventYoloAutoApproved should NOT be emitted for Coding tasks")
+		}
+	}
+}
+
+// TestExecutor_AutoApproved_EmitsEvent verifies that auto-approved tasks emit
+// the EventYoloAutoApproved event with correct payload.
+func TestExecutor_AutoApproved_EmitsEvent(t *testing.T) {
+	// Create mock dependencies.
+	repo := &mockTaskRepo{}
+	ui := &mockUI{}
+
+	// Create executor.
+	executor := NewExecutorWithConfig(ExecutorConfig{
+		TaskRepo:  repo,
+		AgentRepo: &mockAgentRepo{},
+		UI:        ui,
+	})
+
+	// Create runtime with YOLO agent ID.
+	yoloAgentID := "sys-auto-approve-agent-id"
+	runtime, err := NewRuntime(context.Background(), RuntimeConfig{
+		Registry:       acp.NewRegistry(acp.DefaultConfig()),
+		BufferRegistry: acp.NewBufferRegistry(100),
+		AgentRepo:      &mockAgentRepo{autoApprove: &domain.Agent{ID: yoloAgentID, Name: "sys-auto-approve", Type: domain.AgentTypeSystem}},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
+
+	// Create session with runtime.
+	sess := &ActiveSession{
+		acpRuntime: runtime,
+	}
+
+	// Create a Confirmation task assigned to YOLO agent.
+	task := &domain.Task{
+		ID:         idgen.MustNew(),
+		Type:       domain.TaskTypeConfirmation,
+		AssigneeID: yoloAgentID,
+		SeqEpic:    3,
+		SeqStory:   5,
+		Input:      domain.NewNullString(`{"prompt":"test"}`),
+	}
+
+	// Execute.
+	err = executor.Execute(context.Background(), sess, task)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	// Verify exactly one EventYoloAutoApproved event was emitted.
+	count := 0
+	var payload registry.YoloAutoApprovedPayload
+	for _, ev := range ui.notifyAllCalls {
+		if ev.Type == registry.EventYoloAutoApproved {
+			count++
+			var ok bool
+			payload, ok = ev.Payload.(registry.YoloAutoApprovedPayload)
+			if !ok {
+				t.Error("Payload should be YoloAutoApprovedPayload")
+			}
+		}
+	}
+
+	if count != 1 {
+		t.Errorf("Expected exactly 1 EventYoloAutoApproved, got %d", count)
+	}
+
+	// Verify payload fields.
+	if payload.TaskID != task.ID {
+		t.Errorf("Payload.TaskID = %q, want %q", payload.TaskID, task.ID)
+	}
+	if payload.SeqEpic != 3 {
+		t.Errorf("Payload.SeqEpic = %d, want 3", payload.SeqEpic)
+	}
+	if payload.SeqStory != 5 {
+		t.Errorf("Payload.SeqStory = %d, want 5", payload.SeqStory)
+	}
+	if payload.TaskType != int(domain.TaskTypeConfirmation) {
+		t.Errorf("Payload.TaskType = %d, want %d", payload.TaskType, int(domain.TaskTypeConfirmation))
 	}
 }

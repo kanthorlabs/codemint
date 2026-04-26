@@ -153,6 +153,13 @@ const DefaultTaskTimeout int64 = 3_600_000
 // Task is the atomic unit of work assigned to an agent.
 // Input and Output are stored as JSON text in SQLite; callers may
 // json.Unmarshal them into concrete types as needed.
+//
+// AssigneeID Constraints:
+// When AssigneeID equals the sys-auto-approve agent's ID:
+//   - Confirmation (type=2) and Retrospective (type=4) tasks are auto-approved
+//     without prompting the user (YOLO Mode, Story 3.16).
+//   - Coding (type=0) and Verification (type=1) tasks IGNORE the assignee field;
+//     YOLO only changes approval gates, not what gets executed.
 type Task struct {
 	ID         string         `db:"id"`
 	ProjectID  string         `db:"project_id"`

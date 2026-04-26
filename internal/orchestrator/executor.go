@@ -239,9 +239,30 @@ func NewExecutorWithConfig(cfg ExecutorConfig) *Executor {
 	}
 }
 
+// isAutoApproved checks if a task is assigned to the sys-auto-approve agent.
+// Task 3.16.2: YOLO auto-approval bypass helper.
+func (e *Executor) isAutoApproved(sess *ActiveSession, task *domain.Task) bool {
+	if sess == nil || sess.ACPRuntime() == nil {
+		return false
+	}
+	yoloAgentID := sess.ACPRuntime().YoloAgentID
+	return yoloAgentID != "" && task.AssigneeID == yoloAgentID
+}
+
 // Execute dispatches a task to the appropriate handler based on task.Type.
 // This is the main entry point for task execution as defined in Task 3.14.1.
+//
+// Task 3.16.4: For Coding and Verification tasks, the YOLO assignee is ignored
+// with a warning log. YOLO only bypasses approval gates, not execution.
 func (e *Executor) Execute(ctx context.Context, sess *ActiveSession, task *domain.Task) error {
+	// Task 3.16.4: Warn and ignore YOLO assignee on executable task types.
+	if e.isAutoApproved(sess, task) && (task.Type == domain.TaskTypeCoding || task.Type == domain.TaskTypeVerification) {
+		slog.Warn("executor: yolo assignee on executable task — ignoring",
+			"task_id", task.ID,
+			"type", task.Type,
+		)
+	}
+
 	switch task.Type {
 	case domain.TaskTypeCoding:
 		return e.executeCoding(ctx, sess, task)
@@ -548,7 +569,47 @@ func (e *Executor) executeVerification(ctx context.Context, sess *ActiveSession,
 
 // executeConfirmation pauses for human approval/rejection.
 // (Task 3.14.4)
+//
+// Task 3.16.2: If the task is assigned to sys-auto-approve, skip the prompt
+// and mark the task as success with {"auto_approved": true, "agent": "sys-auto-approve"}.
 func (e *Executor) executeConfirmation(ctx context.Context, sess *ActiveSession, task *domain.Task) error {
+	// Task 3.16.2: YOLO auto-approval bypass.
+	if e.isAutoApproved(sess, task) {
+		// Set output for audit trail.
+		e.setTaskOutputJSON(ctx, task, map[string]string{
+			"auto_approved": "true",
+			"agent":         "sys-auto-approve",
+		})
+		// Mark as success (skip awaiting state entirely).
+		if err := e.taskRepo.UpdateTaskStatus(ctx, task.ID, domain.TaskStatusSuccess); err != nil {
+			slog.Error("executor: failed to update auto-approved task status",
+				"task_id", task.ID,
+				"error", err,
+			)
+			return err
+		}
+
+		// Task 3.16.3: Emit UI event for audit notification.
+		e.ui.NotifyAll(registry.UIEvent{
+			Type:    registry.EventYoloAutoApproved,
+			TaskID:  task.ID,
+			Message: fmt.Sprintf("⚡ auto-approved: Story %d.%d", task.SeqEpic, task.SeqStory),
+			Payload: registry.YoloAutoApprovedPayload{
+				TaskID:   task.ID,
+				SeqStory: task.SeqStory,
+				SeqEpic:  task.SeqEpic,
+				TaskType: int(task.Type),
+			},
+		})
+
+		slog.Info("executor: confirmation task auto-approved (YOLO)",
+			"task_id", task.ID,
+			"seq_epic", task.SeqEpic,
+			"seq_story", task.SeqStory,
+		)
+		return nil
+	}
+
 	// 1. Set task and session status to Awaiting.
 	if err := e.taskRepo.UpdateTaskStatus(ctx, task.ID, domain.TaskStatusAwaiting); err != nil {
 		slog.Error("executor: failed to update task status to awaiting",
@@ -623,7 +684,46 @@ func (e *Executor) executeConfirmation(ctx context.Context, sess *ActiveSession,
 
 // executeRetrospective prompts for optional user feedback.
 // (Task 3.14.5)
+//
+// Task 3.16.2: If the task is assigned to sys-auto-approve, skip the freeform
+// prompt and mark as success with {"auto_approved": true, "agent": "sys-auto-approve"}.
 func (e *Executor) executeRetrospective(ctx context.Context, sess *ActiveSession, task *domain.Task) error {
+	// Task 3.16.2: YOLO auto-approval bypass - skip freeform follow-up entirely.
+	if e.isAutoApproved(sess, task) {
+		// Set output for audit trail.
+		e.setTaskOutputJSON(ctx, task, map[string]string{
+			"auto_approved": "true",
+			"agent":         "sys-auto-approve",
+		})
+		// Mark as success directly.
+		if err := e.taskRepo.UpdateTaskStatus(ctx, task.ID, domain.TaskStatusSuccess); err != nil {
+			slog.Error("executor: failed to update auto-approved retrospective status",
+				"task_id", task.ID,
+				"error", err,
+			)
+			return err
+		}
+
+		// Task 3.16.3: Emit UI event for audit notification.
+		e.ui.NotifyAll(registry.UIEvent{
+			Type:    registry.EventYoloAutoApproved,
+			TaskID:  task.ID,
+			Message: fmt.Sprintf("⚡ auto-approved: Epic %d retrospective", task.SeqEpic),
+			Payload: registry.YoloAutoApprovedPayload{
+				TaskID:   task.ID,
+				SeqStory: task.SeqStory,
+				SeqEpic:  task.SeqEpic,
+				TaskType: int(task.Type),
+			},
+		})
+
+		slog.Info("executor: retrospective task auto-approved (YOLO)",
+			"task_id", task.ID,
+			"seq_epic", task.SeqEpic,
+		)
+		return nil
+	}
+
 	// 1. Set task status to Awaiting.
 	if err := e.taskRepo.UpdateTaskStatus(ctx, task.ID, domain.TaskStatusAwaiting); err != nil {
 		slog.Error("executor: failed to update task status to awaiting",

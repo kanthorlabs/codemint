@@ -18,6 +18,26 @@ func (m *mockTaskIDProvider) CurrentTaskID() string {
 	return m.taskID
 }
 
+// mockAgentRepoForRuntime implements repository.AgentRepository for runtime tests.
+type mockAgentRepoForRuntime struct {
+	autoApprove *domain.Agent
+}
+
+func (m *mockAgentRepoForRuntime) EnsureSystemAgents(_ context.Context) error { return nil }
+func (m *mockAgentRepoForRuntime) FindByName(_ context.Context, name string) (*domain.Agent, error) {
+	if name == "sys-auto-approve" && m.autoApprove != nil {
+		return m.autoApprove, nil
+	}
+	return nil, nil
+}
+
+// newTestAgentRepo returns a mock agent repo with a valid sys-auto-approve agent.
+func newTestAgentRepo() *mockAgentRepoForRuntime {
+	return &mockAgentRepoForRuntime{
+		autoApprove: &domain.Agent{ID: "yolo-agent-id", Name: "sys-auto-approve", Type: domain.AgentTypeSystem},
+	}
+}
+
 // TestRuntime_NewRuntime verifies that NewRuntime creates a properly initialized Runtime.
 func TestRuntime_NewRuntime(t *testing.T) {
 	bufferReg := acp.NewBufferRegistry(256)
@@ -29,10 +49,13 @@ func TestRuntime_NewRuntime(t *testing.T) {
 		PermissionRepo: nil,
 		TaskRepo:       nil,
 		SessionRepo:    nil,
-		AgentRepo:      nil,
+		AgentRepo:      newTestAgentRepo(),
 	}
 
-	rt := NewRuntime(cfg)
+	rt, err := NewRuntime(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
 
 	if rt == nil {
 		t.Fatal("NewRuntime returned nil")
@@ -49,14 +72,26 @@ func TestRuntime_NewRuntime(t *testing.T) {
 	if rt.ConsumerCount() != 0 {
 		t.Errorf("ConsumerCount() = %d, want 0", rt.ConsumerCount())
 	}
+
+	// Task 3.16.1: Verify YoloAgentID is cached.
+	if rt.YoloAgentID == "" {
+		t.Error("YoloAgentID should be cached at startup")
+	}
+	if rt.YoloAgentID != "yolo-agent-id" {
+		t.Errorf("YoloAgentID = %q, want %q", rt.YoloAgentID, "yolo-agent-id")
+	}
 }
 
 // TestRuntime_AttachWorker_NilSession verifies that AttachWorker handles nil session gracefully.
 func TestRuntime_AttachWorker_NilSession(t *testing.T) {
-	rt := NewRuntime(RuntimeConfig{
+	rt, err := NewRuntime(context.Background(), RuntimeConfig{
 		Registry:       acp.NewRegistry(acp.DefaultConfig()),
 		BufferRegistry: acp.NewBufferRegistry(256),
+		AgentRepo:      newTestAgentRepo(),
 	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
 
 	worker, err := rt.AttachWorker(context.Background(), nil, nil)
 	if err != nil {
@@ -74,10 +109,14 @@ func TestRuntime_AttachWorker_NilSession(t *testing.T) {
 
 // TestRuntime_DetachSession_CancelsConsumer verifies that DetachSession cancels the consumer goroutine.
 func TestRuntime_DetachSession_CancelsConsumer(t *testing.T) {
-	rt := NewRuntime(RuntimeConfig{
+	rt, err := NewRuntime(context.Background(), RuntimeConfig{
 		Registry:       acp.NewRegistry(acp.DefaultConfig()),
 		BufferRegistry: acp.NewBufferRegistry(256),
+		AgentRepo:      newTestAgentRepo(),
 	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
 
 	sessionID := "test-session-123"
 
@@ -118,10 +157,14 @@ func TestRuntime_DetachSession_CancelsConsumer(t *testing.T) {
 
 // TestRuntime_DetachSession_NonExistent verifies that DetachSession handles non-existent session gracefully.
 func TestRuntime_DetachSession_NonExistent(t *testing.T) {
-	rt := NewRuntime(RuntimeConfig{
+	rt, err := NewRuntime(context.Background(), RuntimeConfig{
 		Registry:       acp.NewRegistry(acp.DefaultConfig()),
 		BufferRegistry: acp.NewBufferRegistry(256),
+		AgentRepo:      newTestAgentRepo(),
 	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
 
 	// Should not panic or error.
 	rt.DetachSession("non-existent-session")
@@ -130,10 +173,14 @@ func TestRuntime_DetachSession_NonExistent(t *testing.T) {
 // TestRuntime_Shutdown verifies that Shutdown cancels all consumers and cleans up.
 func TestRuntime_Shutdown(t *testing.T) {
 	registry := acp.NewRegistry(acp.DefaultConfig())
-	rt := NewRuntime(RuntimeConfig{
+	rt, err := NewRuntime(context.Background(), RuntimeConfig{
 		Registry:       registry,
 		BufferRegistry: acp.NewBufferRegistry(256),
+		AgentRepo:      newTestAgentRepo(),
 	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
 
 	// Add multiple consumers.
 	for _, id := range []string{"session-1", "session-2", "session-3"} {
@@ -165,10 +212,14 @@ func TestRuntime_Shutdown(t *testing.T) {
 
 // TestRuntime_SetCurrentTask verifies that SetCurrentTask propagates to the worker.
 func TestRuntime_SetCurrentTask(t *testing.T) {
-	rt := NewRuntime(RuntimeConfig{
+	rt, err := NewRuntime(context.Background(), RuntimeConfig{
 		Registry:       acp.NewRegistry(acp.DefaultConfig()),
 		BufferRegistry: acp.NewBufferRegistry(256),
+		AgentRepo:      newTestAgentRepo(),
 	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
 
 	// SetCurrentTask with no worker should not panic.
 	rt.SetCurrentTask("non-existent-session", "task-123")
@@ -176,10 +227,14 @@ func TestRuntime_SetCurrentTask(t *testing.T) {
 
 // TestRuntime_GetInterceptor verifies interceptor retrieval.
 func TestRuntime_GetInterceptor(t *testing.T) {
-	rt := NewRuntime(RuntimeConfig{
+	rt, err := NewRuntime(context.Background(), RuntimeConfig{
 		Registry:       acp.NewRegistry(acp.DefaultConfig()),
 		BufferRegistry: acp.NewBufferRegistry(256),
+		AgentRepo:      newTestAgentRepo(),
 	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
 
 	// No interceptor should exist initially.
 	_, ok := rt.GetInterceptor("session-1")
@@ -205,10 +260,14 @@ func TestRuntime_GetInterceptor(t *testing.T) {
 
 // TestRuntime_GetStatusMapper verifies status mapper retrieval.
 func TestRuntime_GetStatusMapper(t *testing.T) {
-	rt := NewRuntime(RuntimeConfig{
+	rt, err := NewRuntime(context.Background(), RuntimeConfig{
 		Registry:       acp.NewRegistry(acp.DefaultConfig()),
 		BufferRegistry: acp.NewBufferRegistry(256),
+		AgentRepo:      newTestAgentRepo(),
 	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
 
 	// No mapper should exist initially.
 	_, ok := rt.GetStatusMapper("session-1")
@@ -234,14 +293,18 @@ func TestRuntime_GetStatusMapper(t *testing.T) {
 
 // TestRuntime_RefreshPermissions verifies permission refresh.
 func TestRuntime_RefreshPermissions(t *testing.T) {
-	rt := NewRuntime(RuntimeConfig{
+	rt, err := NewRuntime(context.Background(), RuntimeConfig{
 		Registry:       acp.NewRegistry(acp.DefaultConfig()),
 		BufferRegistry: acp.NewBufferRegistry(256),
+		AgentRepo:      newTestAgentRepo(),
 		// No permission repo - should not error.
 	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
 
 	// Should not error without permission repo.
-	err := rt.RefreshPermissions(context.Background(), "project-1")
+	err = rt.RefreshPermissions(context.Background(), "project-1")
 	if err != nil {
 		t.Errorf("RefreshPermissions without repo returned error: %v", err)
 	}
@@ -250,10 +313,14 @@ func TestRuntime_RefreshPermissions(t *testing.T) {
 // TestRuntime_cleanupSession verifies session cleanup.
 func TestRuntime_cleanupSession(t *testing.T) {
 	bufferReg := acp.NewBufferRegistry(256)
-	rt := NewRuntime(RuntimeConfig{
+	rt, err := NewRuntime(context.Background(), RuntimeConfig{
 		Registry:       acp.NewRegistry(acp.DefaultConfig()),
 		BufferRegistry: bufferReg,
+		AgentRepo:      newTestAgentRepo(),
 	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
 
 	sessionID := "session-to-cleanup"
 
@@ -313,10 +380,14 @@ func TestRuntime_AttachWorker_Idempotent(t *testing.T) {
 	// This test would require a mock worker spawn, which is complex.
 	// For now, we verify the idempotency check logic by manually adding a consumer.
 
-	rt := NewRuntime(RuntimeConfig{
+	rt, err := NewRuntime(context.Background(), RuntimeConfig{
 		Registry:       acp.NewRegistry(acp.DefaultConfig()),
 		BufferRegistry: acp.NewBufferRegistry(256),
+		AgentRepo:      newTestAgentRepo(),
 	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
 
 	sess := &domain.Session{ID: "test-session-idempotent"}
 
@@ -337,10 +408,14 @@ func TestRuntime_AttachWorker_Idempotent(t *testing.T) {
 
 // TestRuntime_SetCurrentTask_ClearsMapper verifies that SetCurrentTask clears the mapper.
 func TestRuntime_SetCurrentTask_ClearsMapper(t *testing.T) {
-	rt := NewRuntime(RuntimeConfig{
+	rt, err := NewRuntime(context.Background(), RuntimeConfig{
 		Registry:       acp.NewRegistry(acp.DefaultConfig()),
 		BufferRegistry: acp.NewBufferRegistry(256),
+		AgentRepo:      newTestAgentRepo(),
 	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
 
 	sessionID := "test-session-task"
 	taskID := "task-123"
@@ -366,4 +441,66 @@ func TestRuntime_SetCurrentTask_ClearsMapper(t *testing.T) {
 	if mapper.isAlreadyApplied(taskID, domain.TaskStatusProcessing) {
 		t.Error("Status should be cleared after SetCurrentTask")
 	}
+}
+
+// TestRuntime_New_LoadsYoloID verifies that NewRuntime caches the YOLO agent ID.
+// Task 3.16.1: Cache sys-auto-approve Agent ID.
+func TestRuntime_New_LoadsYoloID(t *testing.T) {
+	agentRepo := &mockAgentRepoForRuntime{
+		autoApprove: &domain.Agent{ID: "test-yolo-id", Name: "sys-auto-approve", Type: domain.AgentTypeSystem},
+	}
+
+	rt, err := NewRuntime(context.Background(), RuntimeConfig{
+		Registry:       acp.NewRegistry(acp.DefaultConfig()),
+		BufferRegistry: acp.NewBufferRegistry(256),
+		AgentRepo:      agentRepo,
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime returned error: %v", err)
+	}
+
+	if rt.YoloAgentID == "" {
+		t.Error("YoloAgentID should be non-empty")
+	}
+	if rt.YoloAgentID != "test-yolo-id" {
+		t.Errorf("YoloAgentID = %q, want %q", rt.YoloAgentID, "test-yolo-id")
+	}
+}
+
+// TestRuntime_New_FailsWithoutYoloAgent verifies that NewRuntime fails if sys-auto-approve is missing.
+// Task 3.16.1: Hard-fail at startup if the agent isn't seeded.
+func TestRuntime_New_FailsWithoutYoloAgent(t *testing.T) {
+	// Empty agent repo with no sys-auto-approve agent.
+	agentRepo := &mockAgentRepoForRuntime{
+		autoApprove: nil,
+	}
+
+	_, err := NewRuntime(context.Background(), RuntimeConfig{
+		Registry:       acp.NewRegistry(acp.DefaultConfig()),
+		BufferRegistry: acp.NewBufferRegistry(256),
+		AgentRepo:      agentRepo,
+	})
+
+	if err == nil {
+		t.Fatal("NewRuntime should return error when sys-auto-approve agent is missing")
+	}
+
+	// Verify the error message contains the expected sentinel text.
+	if !contains(err.Error(), "sys-auto-approve agent missing") {
+		t.Errorf("Error message should mention sys-auto-approve agent missing, got: %v", err)
+	}
+}
+
+// contains is a simple helper to check if a string contains a substring.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
+}
+
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

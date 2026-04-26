@@ -172,6 +172,10 @@ const (
 	// EventReviseRequested indicates the user requested revisions to a task.
 	// The payload contains the task ID and optional revision details.
 	EventReviseRequested UIEventType = "revise_requested"
+	// EventYoloAutoApproved indicates a Confirmation or Retrospective task was
+	// auto-approved due to YOLO mode assignment to sys-auto-approve agent.
+	// The payload contains task_id and seq_story for audit purposes.
+	EventYoloAutoApproved UIEventType = "yolo_auto_approved"
 )
 
 // UIEvent represents a fire-and-forget notification broadcast to all UI
@@ -195,6 +199,15 @@ type TaskStatusChangedPayload struct {
 	From   int    `json:"from"`
 	To     int    `json:"to"`
 	Reason string `json:"reason"`
+}
+
+// YoloAutoApprovedPayload contains details about a YOLO auto-approval event.
+// This payload is used with EventYoloAutoApproved events.
+type YoloAutoApprovedPayload struct {
+	TaskID   string `json:"task_id"`
+	SeqStory int    `json:"seq_story"`
+	SeqEpic  int    `json:"seq_epic"`
+	TaskType int    `json:"task_type"`
 }
 
 // PromptKind categorizes the type of decision prompt.
