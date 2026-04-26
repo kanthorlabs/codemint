@@ -46,6 +46,10 @@ type CUIAdapter struct {
 	pendingPromptsMu sync.RWMutex
 	nextPromptID     int
 
+	// Mapping from TaskID to internal prompt ID for CancelPrompt support.
+	taskToPromptID   map[string]int
+	taskToPromptIDMu sync.RWMutex
+
 	// pusher sends notifications to external systems (Telegram, Slack, etc.).
 	// Default is noopPusher which only logs to file.
 	pusher   NotificationPusher
@@ -92,6 +96,7 @@ func NewCUIAdapter(cfg CUIAdapterConfig) *CUIAdapter {
 	a := &CUIAdapter{
 		logger:         logger,
 		pendingPrompts: make(map[int]*pendingPrompt),
+		taskToPromptID: make(map[string]int),
 		nextPromptID:   1,
 		pusher:         noopPusher{}, // Default to no-op; EPIC-04 will set real pusher.
 	}
@@ -302,18 +307,31 @@ func (a *CUIAdapter) registerPrompt(req registry.PromptRequest) int {
 		RespCh:  make(chan registry.PromptResponse, 1),
 	}
 
+	// Track taskID -> promptID mapping for CancelPrompt.
+	if req.TaskID != "" {
+		a.taskToPromptIDMu.Lock()
+		a.taskToPromptID[req.TaskID] = id
+		a.taskToPromptIDMu.Unlock()
+	}
+
 	return id
 }
 
 // unregisterPrompt removes a prompt from the pending queue.
 func (a *CUIAdapter) unregisterPrompt(id int) {
 	a.pendingPromptsMu.Lock()
-	defer a.pendingPromptsMu.Unlock()
-
-	if pending, ok := a.pendingPrompts[id]; ok {
+	pending, ok := a.pendingPrompts[id]
+	if ok {
+		// Remove taskID mapping.
+		if pending.Request.TaskID != "" {
+			a.taskToPromptIDMu.Lock()
+			delete(a.taskToPromptID, pending.Request.TaskID)
+			a.taskToPromptIDMu.Unlock()
+		}
 		close(pending.RespCh)
 		delete(a.pendingPrompts, id)
 	}
+	a.pendingPromptsMu.Unlock()
 }
 
 // getPendingPrompt returns the pending prompt for the given ID.
@@ -338,24 +356,29 @@ func (a *CUIAdapter) logPrompt(id int, req registry.PromptRequest) {
 		msg += fmt.Sprintf("  Message: %s\n", req.Message)
 	}
 
-	// List options.
-	if len(req.PromptOptions) > 0 {
-		msg += "  Options:\n"
-		for _, opt := range req.PromptOptions {
-			msg += fmt.Sprintf("    [%s] %s", opt.ID, opt.Label)
-			if opt.Description != "" {
-				msg += fmt.Sprintf(" - %s", opt.Description)
+	// Handle prompt type.
+	if req.Kind == registry.PromptKindFreeform {
+		msg += fmt.Sprintf("  (awaiting freeform reply — use /reply %d <text>)\n", id)
+	} else {
+		// List options for single-select prompts.
+		if len(req.PromptOptions) > 0 {
+			msg += "  Options:\n"
+			for _, opt := range req.PromptOptions {
+				msg += fmt.Sprintf("    [%s] %s", opt.ID, opt.Label)
+				if opt.Description != "" {
+					msg += fmt.Sprintf(" - %s", opt.Description)
+				}
+				msg += "\n"
 			}
-			msg += "\n"
+		} else if len(req.Options) > 0 {
+			msg += "  Options:\n"
+			for i, opt := range req.Options {
+				msg += fmt.Sprintf("    [%d] %s\n", i+1, opt)
+			}
 		}
-	} else if len(req.Options) > 0 {
-		msg += "  Options:\n"
-		for i, opt := range req.Options {
-			msg += fmt.Sprintf("    [%d] %s\n", i+1, opt)
-		}
-	}
 
-	msg += fmt.Sprintf("  Use: /approve %d <option_id> or /deny %d", id, id)
+		msg += fmt.Sprintf("  Use: /approve %d <option_id> or /deny %d", id, id)
+	}
 
 	a.writeLog(msg)
 }
@@ -377,6 +400,34 @@ func (a *CUIAdapter) ResolvePrompt(id int, optionID string) error {
 	case pending.RespCh <- registry.PromptResponse{
 		SelectedOptionID: optionID,
 		SelectedOption:   optionID, // Legacy field.
+	}:
+		return nil
+	default:
+		return fmt.Errorf("prompt #%d already resolved", id)
+	}
+}
+
+// ReplyPrompt resolves a pending freeform prompt with the given text.
+// Called by the /reply command handler.
+// Returns an error if the prompt ID is not found.
+func (a *CUIAdapter) ReplyPrompt(id int, text string) error {
+	a.pendingPromptsMu.RLock()
+	pending, ok := a.pendingPrompts[id]
+	a.pendingPromptsMu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("prompt #%d not found", id)
+	}
+
+	// Verify this is a freeform prompt.
+	if pending.Request.Kind != registry.PromptKindFreeform {
+		return fmt.Errorf("prompt #%d is not a freeform prompt (use /approve instead)", id)
+	}
+
+	// Send the text response.
+	select {
+	case pending.RespCh <- registry.PromptResponse{
+		Text: text,
 	}:
 		return nil
 	default:
@@ -430,4 +481,40 @@ type PendingPromptInfo struct {
 	ID    int
 	Title string
 	Kind  string
+}
+
+// CancelPrompt dismisses a pending prompt by its task ID.
+// Called by the mediator when another adapter wins the "first-in-wins" race.
+func (a *CUIAdapter) CancelPrompt(taskID string) {
+	// Find the internal prompt ID from the task ID.
+	a.taskToPromptIDMu.RLock()
+	promptID, ok := a.taskToPromptID[taskID]
+	a.taskToPromptIDMu.RUnlock()
+
+	if !ok {
+		return // No pending prompt for this task.
+	}
+
+	// Cancel the prompt by sending a cancellation response.
+	a.pendingPromptsMu.RLock()
+	pending, exists := a.pendingPrompts[promptID]
+	a.pendingPromptsMu.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	// Try to send cancellation response.
+	select {
+	case pending.RespCh <- registry.PromptResponse{
+		Error: ErrPromptCanceled,
+	}:
+		// Successfully sent cancellation.
+	default:
+		// Channel full or already closed - prompt already resolved.
+	}
+
+	// Log the cancellation.
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	a.writeLog(fmt.Sprintf("[%s] PROMPT_CANCELLED #%d: answered elsewhere (task=%s)", timestamp, promptID, taskID))
 }

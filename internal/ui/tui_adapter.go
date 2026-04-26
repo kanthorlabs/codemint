@@ -86,6 +86,10 @@ type TUIAdapter struct {
 	// Input coordination - when true, buffer renders until newline boundary
 	inputFocused atomic.Bool
 	renderBuffer strings.Builder
+
+	// Pending prompts tracking for CancelPrompt support
+	pendingPromptsMu sync.Mutex
+	pendingPrompts   map[string]struct{}
 }
 
 // TUIAdapterConfig holds configuration for creating a TUIAdapter.
@@ -109,6 +113,7 @@ func NewTUIAdapter(cfg TUIAdapterConfig) *TUIAdapter {
 		verbosityGetter: cfg.VerbosityGetter,
 		eventCh:         make(chan registry.UIEvent, eventChannelCapacity),
 		stopCh:          make(chan struct{}),
+		pendingPrompts:  make(map[string]struct{}),
 	}
 	t.verbosity.Store(int32(cfg.Verbosity))
 
@@ -173,6 +178,18 @@ func (t *TUIAdapter) NotifyEvent(event registry.UIEvent) {
 // For TUI mode, this reads from stdin. The implementation handles context
 // cancellation to dismiss the prompt when another adapter responds first.
 func (t *TUIAdapter) PromptDecision(ctx context.Context, req registry.PromptRequest) registry.PromptResponse {
+	// Register this prompt as pending.
+	promptID := req.TaskID
+	t.pendingPromptsMu.Lock()
+	t.pendingPrompts[promptID] = struct{}{}
+	t.pendingPromptsMu.Unlock()
+
+	defer func() {
+		t.pendingPromptsMu.Lock()
+		delete(t.pendingPrompts, promptID)
+		t.pendingPromptsMu.Unlock()
+	}()
+
 	// Flush any pending thinking buffer before showing prompt
 	t.flushThinking()
 
@@ -186,23 +203,51 @@ func (t *TUIAdapter) PromptDecision(ctx context.Context, req registry.PromptRequ
 		t.writeLine(req.Message)
 	}
 
-	// Show options
-	if len(req.PromptOptions) > 0 {
-		for _, opt := range req.PromptOptions {
-			t.writeLine(fmt.Sprintf("  [%s] %s", opt.ID, opt.Label))
-			if opt.Description != "" {
-				t.writeLine(fmt.Sprintf("        %s", opt.Description))
+	// Handle different prompt kinds
+	if req.Kind == registry.PromptKindFreeform {
+		// Freeform prompt: user enters arbitrary text
+		t.writeLine("  (Enter your response as freeform text)")
+	} else {
+		// Show options for single-select prompts
+		if len(req.PromptOptions) > 0 {
+			for _, opt := range req.PromptOptions {
+				t.writeLine(fmt.Sprintf("  [%s] %s", opt.ID, opt.Label))
+				if opt.Description != "" {
+					t.writeLine(fmt.Sprintf("        %s", opt.Description))
+				}
 			}
-		}
-	} else if len(req.Options) > 0 {
-		for i, opt := range req.Options {
-			t.writeLine(fmt.Sprintf("  [%d] %s", i+1, opt))
+		} else if len(req.Options) > 0 {
+			for i, opt := range req.Options {
+				t.writeLine(fmt.Sprintf("  [%d] %s", i+1, opt))
+			}
 		}
 	}
 
 	// Wait for context cancellation (response will come from REPL interceptor)
 	<-ctx.Done()
 	return registry.PromptResponse{Error: ErrPromptCanceled}
+}
+
+// CancelPrompt dismisses a pending prompt by its ID.
+// Called by the mediator when another adapter wins the "first-in-wins" race.
+func (t *TUIAdapter) CancelPrompt(promptID string) {
+	t.pendingPromptsMu.Lock()
+	_, wasPending := t.pendingPrompts[promptID]
+	delete(t.pendingPrompts, promptID)
+	t.pendingPromptsMu.Unlock()
+
+	if wasPending {
+		t.writeLine(fmt.Sprintf("\x1b[90m(prompt %s answered elsewhere)\x1b[0m", promptID))
+	}
+}
+
+// HasPendingPrompt returns true if the given prompt ID is still pending.
+// Useful for testing.
+func (t *TUIAdapter) HasPendingPrompt(promptID string) bool {
+	t.pendingPromptsMu.Lock()
+	defer t.pendingPromptsMu.Unlock()
+	_, ok := t.pendingPrompts[promptID]
+	return ok
 }
 
 // renderLoop processes events from the event channel and renders them.

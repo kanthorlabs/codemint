@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 
@@ -19,6 +20,10 @@ var ErrNoAdapters = errors.New("ui: no adapters registered")
 // ErrPromptCanceled is returned when the parent context is canceled before
 // any adapter responds.
 var ErrPromptCanceled = errors.New("ui: prompt canceled")
+
+// ErrAllAdaptersFailed is returned when all adapters return errors.
+// The underlying error contains the first adapter's error for debugging.
+var ErrAllAdaptersFailed = errors.New("ui: all adapters failed")
 
 // UIMediator manages multiple UIAdapter instances and broadcasts prompt
 // requests concurrently. It implements a "first response wins" racing pattern
@@ -94,8 +99,13 @@ func (m *UIMediator) NotifyAll(event registry.UIEvent) {
 }
 
 // PromptDecision broadcasts the prompt request to all registered adapters
-// concurrently. The first adapter to respond wins; all other adapters receive
-// a context cancellation signal to dismiss their pending prompts.
+// concurrently. The first adapter to respond with a non-error response wins;
+// the mediator immediately calls CancelPrompt on all other adapters so their
+// UIs dismiss the dialog.
+//
+// If all adapters return errors, the mediator returns ErrAllAdaptersFailed
+// wrapping the first error so callers can distinguish "user said no" from
+// "all UIs broken".
 //
 // Returns ErrNoAdapters if no adapters are registered.
 // Returns ErrPromptCanceled if the parent context is canceled before any response.
@@ -114,34 +124,61 @@ func (m *UIMediator) PromptDecision(parentCtx context.Context, req registry.Prom
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
-	// Buffered channel with capacity 1 captures the first response only.
-	respChan := make(chan registry.PromptResponse, 1)
-
-	// Spin up a goroutine for each adapter.
-	var wg sync.WaitGroup
-	for _, adapter := range adapters {
-		wg.Add(1)
-		go func(a UIAdapter) {
-			defer wg.Done()
-			resp := a.PromptDecision(ctx, req)
-
-			// Non-blocking send: only the first response lands in the channel.
-			select {
-			case respChan <- resp:
-			default:
-			}
-		}(adapter)
+	// Result type for channel communication.
+	type result struct {
+		idx  int
+		resp registry.PromptResponse
 	}
 
-	// Wait for either:
-	// 1. The first adapter response
-	// 2. The parent context being canceled
-	select {
-	case resp := <-respChan:
-		// First response received. The deferred cancel() will signal
-		// remaining adapters to dismiss their prompts.
-		return resp
-	case <-parentCtx.Done():
-		return registry.PromptResponse{Error: ErrPromptCanceled}
+	// Buffered channel captures all responses.
+	resultCh := make(chan result, len(adapters))
+
+	// Spin up a goroutine for each adapter.
+	for i, adapter := range adapters {
+		go func(idx int, a UIAdapter) {
+			resp := a.PromptDecision(ctx, req)
+			resultCh <- result{idx: idx, resp: resp}
+		}(i, adapter)
+	}
+
+	var firstErr error
+	var winnerIdx int = -1
+
+	// Collect responses until we get a success or all fail.
+	for received := 0; received < len(adapters); received++ {
+		select {
+		case r := <-resultCh:
+			if r.resp.Error == nil {
+				// First non-error response wins!
+				winnerIdx = r.idx
+				cancel() // Signal others to abort via context.
+
+				// Call CancelPrompt on all other adapters.
+				m.cancelOthers(adapters, winnerIdx, req.TaskID)
+
+				return r.resp
+			}
+			// Track first error for ErrAllAdaptersFailed.
+			if firstErr == nil {
+				firstErr = r.resp.Error
+			}
+
+		case <-parentCtx.Done():
+			return registry.PromptResponse{Error: ErrPromptCanceled}
+		}
+	}
+
+	// All adapters returned errors.
+	return registry.PromptResponse{
+		Error: fmt.Errorf("%w: %v", ErrAllAdaptersFailed, firstErr),
+	}
+}
+
+// cancelOthers calls CancelPrompt on every adapter except the winner.
+func (m *UIMediator) cancelOthers(adapters []UIAdapter, winnerIdx int, promptID string) {
+	for i, adapter := range adapters {
+		if i != winnerIdx {
+			go adapter.CancelPrompt(promptID)
+		}
 	}
 }

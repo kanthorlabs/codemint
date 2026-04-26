@@ -3,6 +3,9 @@ package ui
 import (
 	"bytes"
 	"context"
+	"errors"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,8 +16,9 @@ import (
 
 // FastMockAdapter returns a response quickly (10ms).
 type FastMockAdapter struct {
-	response registry.PromptResponse
-	called   atomic.Bool
+	response         registry.PromptResponse
+	called           atomic.Bool
+	canceledPromptID atomic.Value // stores string
 	// events stores received UIEvent notifications for test assertions.
 	events   []registry.UIEvent
 	eventsMu sync.Mutex
@@ -44,12 +48,25 @@ func (a *FastMockAdapter) PromptDecision(ctx context.Context, req registry.Promp
 	}
 }
 
+func (a *FastMockAdapter) CancelPrompt(promptID string) {
+	a.canceledPromptID.Store(promptID)
+}
+
+func (a *FastMockAdapter) CanceledPromptID() string {
+	v := a.canceledPromptID.Load()
+	if v == nil {
+		return ""
+	}
+	return v.(string)
+}
+
 // SlowMockAdapter blocks until context is canceled or returns after 100ms.
 type SlowMockAdapter struct {
-	response  registry.PromptResponse
-	called    atomic.Bool
-	canceled  atomic.Bool
-	cancelErr error
+	response         registry.PromptResponse
+	called           atomic.Bool
+	canceled         atomic.Bool
+	cancelErr        error
+	canceledPromptID atomic.Value // stores string
 	// events stores received UIEvent notifications for test assertions.
 	events   []registry.UIEvent
 	eventsMu sync.Mutex
@@ -79,6 +96,18 @@ func (a *SlowMockAdapter) PromptDecision(ctx context.Context, req registry.Promp
 		a.cancelErr = ctx.Err()
 		return registry.PromptResponse{Error: ctx.Err()}
 	}
+}
+
+func (a *SlowMockAdapter) CancelPrompt(promptID string) {
+	a.canceledPromptID.Store(promptID)
+}
+
+func (a *SlowMockAdapter) CanceledPromptID() string {
+	v := a.canceledPromptID.Load()
+	if v == nil {
+		return ""
+	}
+	return v.(string)
 }
 
 func TestNewUIMediator(t *testing.T) {
@@ -376,5 +405,328 @@ func TestUIMediator_NotifyAll_FireAndForget(t *testing.T) {
 	received := slow.Events()
 	if len(received) != 1 {
 		t.Errorf("expected 1 event, got %d", len(received))
+	}
+}
+
+// --- Task 3.18.1: Baseline Legacy Test ---
+// This test documents the current mediator behavior before 3.18 changes.
+// It verifies that the mediator already broadcasts to all adapters concurrently
+// and returns the first response.
+func TestMediator_Legacy_SingleAdapter(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewUIMediator(&buf)
+
+	// Single adapter case: should return its response.
+	adapter := &FastMockAdapter{response: registry.PromptResponse{SelectedOption: "Accept"}}
+	m.RegisterAdapter(adapter)
+
+	req := registry.PromptRequest{
+		TaskID:  "task-legacy",
+		Message: "Legacy test",
+		Options: []string{"Accept", "Deny"},
+	}
+
+	resp := m.PromptDecision(context.Background(), req)
+
+	if resp.SelectedOption != "Accept" {
+		t.Errorf("expected 'Accept', got %q", resp.SelectedOption)
+	}
+	if resp.Error != nil {
+		t.Errorf("unexpected error: %v", resp.Error)
+	}
+	if !adapter.called.Load() {
+		t.Error("adapter was not called")
+	}
+}
+
+// --- Task 3.18.2: First-In-Wins with Cancel-the-Losers Tests ---
+
+// FailingMockAdapter always returns an error after a delay.
+type FailingMockAdapter struct {
+	delay  time.Duration
+	err    error
+	called atomic.Bool
+}
+
+func (a *FailingMockAdapter) NotifyEvent(event registry.UIEvent) {}
+
+func (a *FailingMockAdapter) PromptDecision(ctx context.Context, req registry.PromptRequest) registry.PromptResponse {
+	a.called.Store(true)
+	select {
+	case <-time.After(a.delay):
+		return registry.PromptResponse{Error: a.err}
+	case <-ctx.Done():
+		return registry.PromptResponse{Error: ctx.Err()}
+	}
+}
+
+func (a *FailingMockAdapter) CancelPrompt(promptID string) {}
+
+// Compile-time check that FailingMockAdapter implements UIAdapter.
+var _ UIAdapter = (*FailingMockAdapter)(nil)
+
+func TestMediator_FirstInWins_CancelsCalled(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewUIMediator(&buf)
+
+	// Fast adapter wins, slow adapter should receive CancelPrompt.
+	fast := &FastMockAdapter{response: registry.PromptResponse{SelectedOption: "Accept"}}
+	slow := &SlowMockAdapter{response: registry.PromptResponse{SelectedOption: "Revert"}}
+
+	m.RegisterAdapter(fast)
+	m.RegisterAdapter(slow)
+
+	req := registry.PromptRequest{
+		TaskID:  "task-cancel-test",
+		Message: "Test cancel",
+		Options: []string{"Accept", "Revert"},
+	}
+
+	resp := m.PromptDecision(context.Background(), req)
+
+	// Fast adapter should win.
+	if resp.SelectedOption != "Accept" {
+		t.Errorf("expected 'Accept', got %q", resp.SelectedOption)
+	}
+	if resp.Error != nil {
+		t.Errorf("unexpected error: %v", resp.Error)
+	}
+
+	// Give time for CancelPrompt to be called on slow adapter.
+	time.Sleep(30 * time.Millisecond)
+
+	// Slow adapter should have received CancelPrompt.
+	if slow.CanceledPromptID() != "task-cancel-test" {
+		t.Errorf("slow adapter CancelPrompt not called with correct promptID; got %q", slow.CanceledPromptID())
+	}
+
+	// Fast adapter (winner) should NOT receive CancelPrompt.
+	if fast.CanceledPromptID() != "" {
+		t.Errorf("fast adapter (winner) should not receive CancelPrompt; got %q", fast.CanceledPromptID())
+	}
+}
+
+func TestMediator_AllFail_ReturnsErrAllAdaptersFailed(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewUIMediator(&buf)
+
+	// Both adapters return errors.
+	errFirst := errors.New("adapter1 failed")
+	errSecond := errors.New("adapter2 failed")
+
+	adapter1 := &FailingMockAdapter{delay: 10 * time.Millisecond, err: errFirst}
+	adapter2 := &FailingMockAdapter{delay: 20 * time.Millisecond, err: errSecond}
+
+	m.RegisterAdapter(adapter1)
+	m.RegisterAdapter(adapter2)
+
+	req := registry.PromptRequest{
+		TaskID:  "task-all-fail",
+		Message: "All fail test",
+		Options: []string{"Accept"},
+	}
+
+	resp := m.PromptDecision(context.Background(), req)
+
+	// Should return ErrAllAdaptersFailed wrapping the first error.
+	if resp.Error == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	if !errors.Is(resp.Error, ErrAllAdaptersFailed) {
+		t.Errorf("expected ErrAllAdaptersFailed, got %v", resp.Error)
+	}
+
+	// The first error should be wrapped.
+	if !strings.Contains(resp.Error.Error(), "adapter1 failed") {
+		t.Errorf("expected wrapped error to contain first adapter's error; got %v", resp.Error)
+	}
+
+	// Both adapters should have been called.
+	if !adapter1.called.Load() {
+		t.Error("adapter1 was not called")
+	}
+	if !adapter2.called.Load() {
+		t.Error("adapter2 was not called")
+	}
+}
+
+func TestMediator_FirstNonErrorWins_IgnoresEarlierErrors(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewUIMediator(&buf)
+
+	// First adapter fails quickly, second adapter succeeds slowly.
+	failing := &FailingMockAdapter{delay: 5 * time.Millisecond, err: errors.New("failed")}
+	succeeding := &SlowMockAdapter{response: registry.PromptResponse{SelectedOption: "Success"}}
+
+	m.RegisterAdapter(failing)
+	m.RegisterAdapter(succeeding)
+
+	req := registry.PromptRequest{
+		TaskID:  "task-error-then-success",
+		Message: "Error then success test",
+		Options: []string{"Success"},
+	}
+
+	resp := m.PromptDecision(context.Background(), req)
+
+	// The succeeding adapter should win despite failing adapter responding first.
+	if resp.SelectedOption != "Success" {
+		t.Errorf("expected 'Success', got %q", resp.SelectedOption)
+	}
+	if resp.Error != nil {
+		t.Errorf("unexpected error: %v", resp.Error)
+	}
+}
+
+// --- Task 3.18.5: Context-Cancellation and Goroutine Leak Tests ---
+
+// BlockingMockAdapter blocks indefinitely until context is canceled.
+type BlockingMockAdapter struct {
+	called           atomic.Bool
+	canceledPromptID atomic.Value
+}
+
+func (a *BlockingMockAdapter) NotifyEvent(event registry.UIEvent) {}
+
+func (a *BlockingMockAdapter) PromptDecision(ctx context.Context, req registry.PromptRequest) registry.PromptResponse {
+	a.called.Store(true)
+	// Block for up to 5 seconds, but respect context cancellation.
+	select {
+	case <-time.After(5 * time.Second):
+		return registry.PromptResponse{Error: errors.New("timed out")}
+	case <-ctx.Done():
+		return registry.PromptResponse{Error: ctx.Err()}
+	}
+}
+
+func (a *BlockingMockAdapter) CancelPrompt(promptID string) {
+	a.canceledPromptID.Store(promptID)
+}
+
+// Compile-time check that BlockingMockAdapter implements UIAdapter.
+var _ UIAdapter = (*BlockingMockAdapter)(nil)
+
+func TestMediator_ParentContextCancel_AbortsAdapters(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewUIMediator(&buf)
+
+	// Use a blocking adapter that will block for 5s unless canceled.
+	blocking := &BlockingMockAdapter{}
+	m.RegisterAdapter(blocking)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	req := registry.PromptRequest{
+		TaskID:  "task-cancel-test",
+		Message: "Cancel test",
+		Options: []string{"Accept"},
+	}
+
+	// Cancel the context after a short delay.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	resp := m.PromptDecision(ctx, req)
+	elapsed := time.Since(start)
+
+	// Should return ErrPromptCanceled within 250ms (well before the 5s timeout).
+	if elapsed > 250*time.Millisecond {
+		t.Errorf("PromptDecision took %v, expected < 250ms", elapsed)
+	}
+
+	if resp.Error != ErrPromptCanceled {
+		t.Errorf("expected ErrPromptCanceled, got %v", resp.Error)
+	}
+
+	// The adapter should have been called.
+	if !blocking.called.Load() {
+		t.Error("blocking adapter was not called")
+	}
+}
+
+func TestMediator_NoGoroutineLeak_AfterCancel(t *testing.T) {
+	// Count initial goroutines.
+	initialGoroutines := runtime.NumGoroutine()
+
+	var buf bytes.Buffer
+	m := NewUIMediator(&buf)
+
+	// Use multiple blocking adapters.
+	adapter1 := &BlockingMockAdapter{}
+	adapter2 := &BlockingMockAdapter{}
+	adapter3 := &BlockingMockAdapter{}
+	m.RegisterAdapter(adapter1)
+	m.RegisterAdapter(adapter2)
+	m.RegisterAdapter(adapter3)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	req := registry.PromptRequest{
+		TaskID:  "task-leak-test",
+		Message: "Leak test",
+		Options: []string{"Accept"},
+	}
+
+	// Cancel immediately after starting.
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		cancel()
+	}()
+
+	_ = m.PromptDecision(ctx, req)
+
+	// Give goroutines time to clean up.
+	time.Sleep(100 * time.Millisecond)
+
+	// Check for goroutine leaks.
+	// Allow some tolerance (e.g., +2) for runtime variations.
+	finalGoroutines := runtime.NumGoroutine()
+	leaked := finalGoroutines - initialGoroutines
+
+	if leaked > 2 {
+		t.Errorf("goroutine leak detected: started with %d, ended with %d (leaked %d)",
+			initialGoroutines, finalGoroutines, leaked)
+	}
+}
+
+// --- Task 3.18.3: Adapter CancelPrompt Tests ---
+
+func TestTUIAdapter_CancelPrompt_RemovesPending(t *testing.T) {
+	var buf bytes.Buffer
+	adapter := NewTUIAdapter(TUIAdapterConfig{
+		Writer:    &buf,
+		Verbosity: VerbosityTask,
+	})
+	defer adapter.Stop()
+
+	// Simulate a pending prompt by adding to the map directly.
+	adapter.pendingPromptsMu.Lock()
+	adapter.pendingPrompts["task-123"] = struct{}{}
+	adapter.pendingPromptsMu.Unlock()
+
+	// Verify it's pending.
+	if !adapter.HasPendingPrompt("task-123") {
+		t.Fatal("expected prompt to be pending")
+	}
+
+	// Cancel the prompt.
+	adapter.CancelPrompt("task-123")
+
+	// Give time for the write to happen.
+	time.Sleep(20 * time.Millisecond)
+
+	// Verify it's no longer pending.
+	if adapter.HasPendingPrompt("task-123") {
+		t.Error("expected prompt to be removed after cancel")
+	}
+
+	// Verify log message was written.
+	output := buf.String()
+	if !strings.Contains(output, "answered elsewhere") {
+		t.Errorf("expected cancel message in output; got %q", output)
 	}
 }

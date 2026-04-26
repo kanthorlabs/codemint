@@ -24,7 +24,7 @@ type DaemonCommandDeps struct {
 	CUIAdapter    *ui.CUIAdapter // Set when running in daemon mode.
 }
 
-// RegisterDaemonCommands registers daemon-specific commands (/tasks, /status, /approve, /deny).
+// RegisterDaemonCommands registers daemon-specific commands (/tasks, /status, /approve, /deny, /reply).
 // These commands support the CUI low-bandwidth pulse workflow.
 func RegisterDaemonCommands(r *registry.CommandRegistry, deps *DaemonCommandDeps) error {
 	commands := []registry.Command{
@@ -55,6 +55,13 @@ func RegisterDaemonCommands(r *registry.CommandRegistry, deps *DaemonCommandDeps
 			Usage:          "/deny <prompt-id>",
 			SupportedModes: []registry.ClientMode{registry.ClientModeDaemon},
 			Handler:        denyHandler(deps),
+		},
+		{
+			Name:           "reply",
+			Description:    "Reply to a freeform prompt with text (daemon mode).",
+			Usage:          "/reply <prompt-id> <text>",
+			SupportedModes: []registry.ClientMode{registry.ClientModeDaemon},
+			Handler:        replyHandler(deps),
 		},
 	}
 
@@ -390,6 +397,57 @@ func denyHandler(deps *DaemonCommandDeps) registry.Handler {
 
 		return registry.CommandResult{
 			Message: fmt.Sprintf("Denied prompt #%d", promptID),
+			Action:  registry.ActionNone,
+		}, nil
+	}
+}
+
+// replyHandler handles the /reply command.
+// Usage: /reply <prompt-id> <text>
+// Used for freeform prompts (e.g., retrospectives) where the user provides arbitrary text.
+func replyHandler(deps *DaemonCommandDeps) registry.Handler {
+	return func(ctx context.Context, active registry.ActiveSessionInfo, args []string, rawArgs string) (registry.CommandResult, error) {
+		if deps.CUIAdapter == nil {
+			return registry.CommandResult{
+				Message: "Run with --mode=daemon to use this command.",
+				Action:  registry.ActionNone,
+			}, nil
+		}
+
+		if len(args) < 2 {
+			return registry.CommandResult{
+				Message: "Usage: /reply <prompt-id> <text>\nExample: /reply 1 The tests pass but coverage is low",
+				Action:  registry.ActionNone,
+			}, nil
+		}
+
+		promptID, err := strconv.Atoi(args[0])
+		if err != nil {
+			return registry.CommandResult{
+				Message: fmt.Sprintf("Invalid prompt ID: %s (must be a number)", args[0]),
+				Action:  registry.ActionNone,
+			}, nil
+		}
+
+		// Extract text from rawArgs after the prompt ID.
+		// rawArgs format: "<prompt-id> <rest of the text...>"
+		text := strings.TrimSpace(strings.TrimPrefix(rawArgs, args[0]))
+		if text == "" {
+			return registry.CommandResult{
+				Message: "Please provide text for the reply.",
+				Action:  registry.ActionNone,
+			}, nil
+		}
+
+		if err := deps.CUIAdapter.ReplyPrompt(promptID, text); err != nil {
+			return registry.CommandResult{
+				Message: fmt.Sprintf("Failed to reply: %s", err.Error()),
+				Action:  registry.ActionNone,
+			}, nil
+		}
+
+		return registry.CommandResult{
+			Message: fmt.Sprintf("Replied to prompt #%d", promptID),
 			Action:  registry.ActionNone,
 		}, nil
 	}

@@ -20,4 +20,10 @@ type UIAdapter interface {
 	// selects an option or the context is canceled. Implementations must
 	// dismiss the prompt immediately when ctx is canceled.
 	PromptDecision(ctx context.Context, req registry.PromptRequest) registry.PromptResponse
+
+	// CancelPrompt dismisses a pending prompt by its ID. Called by the mediator
+	// when another adapter wins the "first-in-wins" race. Implementations should
+	// remove the prompt from any pending state and optionally notify the user
+	// that the prompt was answered elsewhere.
+	CancelPrompt(promptID string)
 }

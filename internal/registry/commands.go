@@ -218,6 +218,11 @@ const (
 	PromptKindGeneral PromptKind = "general"
 	// PromptKindACPCommandApproval is used for ACP blocked/unknown command approval.
 	PromptKindACPCommandApproval PromptKind = "acp_command_approval"
+	// PromptKindSingleSelect is a prompt with predefined options (same as General).
+	PromptKindSingleSelect PromptKind = "single_select"
+	// PromptKindFreeform is a prompt that accepts arbitrary text input.
+	// Used for retrospectives and other open-ended questions.
+	PromptKindFreeform PromptKind = "freeform"
 )
 
 // PromptOption represents a selectable choice in a decision prompt.
@@ -252,6 +257,8 @@ type PromptResponse struct {
 	SelectedOption string
 	// SelectedOptionID is the ID of the selected PromptOption.
 	SelectedOptionID string
+	// Text is the user's freeform text input (for PromptKindFreeform).
+	Text string
 	// Error is set if the prompt failed or was cancelled.
 	Error error
 }
