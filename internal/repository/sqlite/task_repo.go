@@ -286,3 +286,20 @@ func (r *taskRepo) ListCoordinationAfter(ctx context.Context, sessionID string, 
 	}
 	return tasks, nil
 }
+
+// ListBySession returns all tasks in the given session, ordered hierarchically
+// by (seq_epic, seq_story, seq_task). Used by the /tasks command.
+func (r *taskRepo) ListBySession(ctx context.Context, sessionID string) ([]*domain.Task, error) {
+	const query = `
+		SELECT id, project_id, session_id, workflow_id, assignee_id,
+		       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id
+		FROM task
+		WHERE session_id = ?
+		ORDER BY seq_epic ASC, seq_story ASC, seq_task ASC`
+
+	var tasks []*domain.Task
+	if err := r.db.SelectContext(ctx, &tasks, query, sessionID); err != nil {
+		return nil, fmt.Errorf("sqlite: list tasks for session %q: %w", sessionID, err)
+	}
+	return tasks, nil
+}

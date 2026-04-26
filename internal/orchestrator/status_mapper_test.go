@@ -83,6 +83,10 @@ func (m *statusMapperMockTaskRepo) ListCoordinationAfter(ctx context.Context, se
 	return nil, nil
 }
 
+func (m *statusMapperMockTaskRepo) ListBySession(ctx context.Context, sessionID string) ([]*domain.Task, error) {
+	return nil, nil
+}
+
 func (m *statusMapperMockTaskRepo) StatusUpdates() []statusUpdate {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -524,9 +528,9 @@ func TestStatusMapper_StatusChangedPayload(t *testing.T) {
 		t.Fatalf("expected 1 UI event, got %d", len(events))
 	}
 
-	payload, ok := events[0].Payload.(TaskStatusChangedPayload)
+	payload, ok := events[0].Payload.(registry.TaskStatusChangedPayload)
 	if !ok {
-		t.Fatalf("expected TaskStatusChangedPayload, got %T", events[0].Payload)
+		t.Fatalf("expected registry.TaskStatusChangedPayload, got %T", events[0].Payload)
 	}
 
 	if payload.TaskID != "task-10" {

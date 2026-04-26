@@ -55,6 +55,9 @@ func (m *mockTaskRepo) Create(_ context.Context, _ *domain.Task) error {
 func (m *mockTaskRepo) ListCoordinationAfter(_ context.Context, _ string, _ string) ([]*domain.Task, error) {
 	return nil, nil
 }
+func (m *mockTaskRepo) ListBySession(_ context.Context, _ string) ([]*domain.Task, error) {
+	return nil, nil
+}
 
 type mockAgentRepo struct {
 	human *domain.Agent

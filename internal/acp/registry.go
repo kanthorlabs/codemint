@@ -159,6 +159,39 @@ func (r *Registry) Count() int {
 	return count
 }
 
+// WorkerStatus contains information about a worker's state.
+type WorkerStatus struct {
+	PID       int
+	State     string // "running", "stopped"
+	Cwd       string
+	StartedAt time.Time // Approximate start time (when first observed).
+}
+
+// Status returns status information about the worker for the given session ID.
+// Returns nil if no worker exists for the session.
+func (r *Registry) Status(sessionID string) *WorkerStatus {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	worker, ok := r.workers[sessionID]
+	if !ok {
+		return nil
+	}
+
+	state := "stopped"
+	if worker.Alive() {
+		state = "running"
+	}
+
+	return &WorkerStatus{
+		PID:   worker.Pid(),
+		State: state,
+		Cwd:   worker.Cwd(),
+		// Note: Worker doesn't track start time, so we leave this zero.
+		// A future enhancement could add start time tracking to Worker.
+	}
+}
+
 // stopWorker gracefully stops a worker using two-phase shutdown.
 func (r *Registry) stopWorker(ctx context.Context, worker *Worker) error {
 	return worker.StopGraceful(ctx, DefaultStopTimeout)

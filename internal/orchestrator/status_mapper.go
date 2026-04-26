@@ -239,7 +239,7 @@ func (m *StatusMapper) emitStatusChangedEvent(taskID string, from, to domain.Tas
 		return
 	}
 
-	payload := TaskStatusChangedPayload{
+	payload := registry.TaskStatusChangedPayload{
 		TaskID: taskID,
 		From:   int(from),
 		To:     int(to),
@@ -252,14 +252,6 @@ func (m *StatusMapper) emitStatusChangedEvent(taskID string, from, to domain.Tas
 		Message: formatStatusChangeMessage(from, to),
 		Payload: payload,
 	})
-}
-
-// TaskStatusChangedPayload contains details about a task status change.
-type TaskStatusChangedPayload struct {
-	TaskID string `json:"task_id"`
-	From   int    `json:"from"`
-	To     int    `json:"to"`
-	Reason string `json:"reason"`
 }
 
 // formatStatusChangeMessage creates a human-readable message for a status change.

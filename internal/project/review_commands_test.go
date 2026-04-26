@@ -60,6 +60,10 @@ func (m *mockTaskRepo) ListCoordinationAfter(_ context.Context, _ string, _ stri
 	return nil, nil
 }
 
+func (m *mockTaskRepo) ListBySession(_ context.Context, _ string) ([]*domain.Task, error) {
+	return nil, nil
+}
+
 // --- Mock CodingAgent ---
 
 type mockCodingAgent struct {

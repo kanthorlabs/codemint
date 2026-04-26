@@ -53,4 +53,9 @@ type TaskRepository interface {
 	// Used to show "missed activity" when a client reclaims a session.
 	// If afterTaskID is empty, returns all Coordination tasks.
 	ListCoordinationAfter(ctx context.Context, sessionID string, afterTaskID string) ([]*domain.Task, error)
+
+	// ListBySession returns all tasks in the given session, ordered hierarchically
+	// by (seq_epic, seq_story, seq_task). Used by the /tasks command to display
+	// task hierarchy with status indicators.
+	ListBySession(ctx context.Context, sessionID string) ([]*domain.Task, error)
 }

@@ -175,6 +175,10 @@ func (m *interceptorMockTaskRepo) ListCoordinationAfter(ctx context.Context, ses
 	return nil, nil
 }
 
+func (m *interceptorMockTaskRepo) ListBySession(ctx context.Context, sessionID string) ([]*domain.Task, error) {
+	return nil, nil
+}
+
 func (m *interceptorMockTaskRepo) StatusUpdates() []statusUpdate {
 	m.mu.Lock()
 	defer m.mu.Unlock()

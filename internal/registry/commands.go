@@ -185,6 +185,15 @@ type UIEvent struct {
 	Payload any
 }
 
+// TaskStatusChangedPayload contains details about a task status change.
+// This payload is used with EventTaskStatusChanged events.
+type TaskStatusChangedPayload struct {
+	TaskID string `json:"task_id"`
+	From   int    `json:"from"`
+	To     int    `json:"to"`
+	Reason string `json:"reason"`
+}
+
 // PromptKind categorizes the type of decision prompt.
 type PromptKind string
 

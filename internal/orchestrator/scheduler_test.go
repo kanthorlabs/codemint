@@ -41,6 +41,9 @@ func (m *mockTaskRepoForScheduler) UpdateAssignee(_ context.Context, _ string, _
 func (m *mockTaskRepoForScheduler) ListCoordinationAfter(_ context.Context, _ string, _ string) ([]*domain.Task, error) {
 	return nil, nil
 }
+func (m *mockTaskRepoForScheduler) ListBySession(_ context.Context, _ string) ([]*domain.Task, error) {
+	return nil, nil
+}
 
 type mockExecutorForScheduler struct {
 	executedTasks []*domain.Task

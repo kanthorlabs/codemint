@@ -74,6 +74,28 @@ func DatabasePath() string {
 	return filepath.Join(DataDir(), "codemint.db")
 }
 
+// StateDir returns the base directory for runtime state files (logs, sockets).
+// This follows the XDG Base Directory spec for state data.
+//
+// Precedence (Unix): $XDG_STATE_HOME/codemint > ~/.local/state/codemint
+// Windows: %LOCALAPPDATA%\codemint\state
+func StateDir() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(os.Getenv("LOCALAPPDATA"), AppName, "state")
+	}
+
+	if xdgState := os.Getenv("XDG_STATE_HOME"); xdgState != "" {
+		return filepath.Join(xdgState, AppName)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		// Fallback to current directory if home is unavailable.
+		return filepath.Join(".", ".local", "state", AppName)
+	}
+	return filepath.Join(home, ".local", "state", AppName)
+}
+
 // EnsureDirs creates all required application directories if they do not exist.
 // This function is idempotent and safe to call multiple times.
 //
@@ -86,6 +108,7 @@ func EnsureDirs() error {
 		DataDir(),
 		MemoryDir(),
 		ConfigDir(),
+		StateDir(),
 	}
 
 	for _, dir := range dirs {
