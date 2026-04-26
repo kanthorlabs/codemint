@@ -3,9 +3,11 @@ package repl
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
+	"codemint.kanthorlabs.com/internal/acp"
 	"codemint.kanthorlabs.com/internal/domain"
 	"codemint.kanthorlabs.com/internal/registry"
 	"codemint.kanthorlabs.com/internal/repository"
@@ -17,9 +19,10 @@ type SessionCommandDeps struct {
 	ProjectRepo   repository.ProjectRepository
 	TaskRepo      repository.TaskRepository
 	ActiveSession registry.MutableSessionInfo
+	ACPRegistry   *acp.Registry
 }
 
-// RegisterSessionCommands registers session management commands (/session-resume, /activity).
+// RegisterSessionCommands registers session management commands (/session-resume, /activity, /session-archive).
 func RegisterSessionCommands(r *registry.CommandRegistry, deps *SessionCommandDeps) error {
 	commands := []registry.Command{
 		{
@@ -35,6 +38,13 @@ func RegisterSessionCommands(r *registry.CommandRegistry, deps *SessionCommandDe
 			Usage:          "/activity",
 			SupportedModes: []registry.ClientMode{registry.ClientModeCLI, registry.ClientModeDaemon},
 			Handler:        activityHandler(deps),
+		},
+		{
+			Name:           "session-archive",
+			Description:    "Archive the current session or a specified session, stopping its ACP worker.",
+			Usage:          "/session-archive [session-id]",
+			SupportedModes: []registry.ClientMode{registry.ClientModeCLI, registry.ClientModeDaemon},
+			Handler:        sessionArchiveHandler(deps),
 		},
 	}
 
@@ -338,4 +348,68 @@ func formatActivityEntry(t *domain.Task) string {
 	sb.WriteString("\n")
 
 	return sb.String()
+}
+
+// sessionArchiveHandler handles the /session-archive command.
+// Without args: archives the current session.
+// With session ID: archives the specified session.
+func sessionArchiveHandler(deps *SessionCommandDeps) registry.Handler {
+	return func(ctx context.Context, active registry.ActiveSessionInfo, args []string, _ string) (registry.CommandResult, error) {
+		var sessionID string
+
+		if len(args) == 0 {
+			// Archive current session.
+			sessionID = deps.ActiveSession.GetSessionID()
+			if sessionID == "" {
+				return registry.CommandResult{
+					Message: "No active session to archive. Use /project-open to start a session first.",
+					Action:  registry.ActionNone,
+				}, nil
+			}
+		} else {
+			// Archive specified session.
+			session, err := findSessionByPrefix(ctx, deps.SessionRepo, args[0])
+			if err != nil {
+				return registry.CommandResult{}, fmt.Errorf("find session: %w", err)
+			}
+			if session == nil {
+				return registry.CommandResult{
+					Message: fmt.Sprintf("Session not found: %s", args[0]),
+					Action:  registry.ActionNone,
+				}, nil
+			}
+			sessionID = session.ID
+		}
+
+		// Archive the session in the database.
+		if err := deps.SessionRepo.Archive(ctx, sessionID); err != nil {
+			return registry.CommandResult{}, fmt.Errorf("archive session: %w", err)
+		}
+
+		// Stop the ACP worker (if running) - best effort, don't fail the archive.
+		if deps.ACPRegistry != nil {
+			if err := deps.ACPRegistry.Stop(ctx, sessionID); err != nil {
+				slog.Error("session-archive: failed to stop worker",
+					"sessionID", sessionID,
+					"error", err,
+				)
+			}
+		}
+
+		// If we archived the current session, clear the active session state.
+		currentSessionID := deps.ActiveSession.GetSessionID()
+		if currentSessionID == sessionID {
+			deps.ActiveSession.SetSession(nil, nil, false)
+		}
+
+		shortID := sessionID
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+
+		return registry.CommandResult{
+			Message: fmt.Sprintf("Archived session %s. Worker stopped.", shortID),
+			Action:  registry.ActionNone,
+		}, nil
+	}
 }

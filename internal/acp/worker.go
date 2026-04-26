@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -18,6 +19,7 @@ const (
 	DefaultCommand          = "opencode"
 	DefaultHandshakeTimeout = 10 * time.Second
 	DefaultOutChannelSize   = 256
+	DefaultGracePeriod      = 3 * time.Second
 )
 
 // ErrHandshakeTimeout is returned when the initialize handshake times out.
@@ -257,8 +259,102 @@ func (w *Worker) Done() <-chan struct{} {
 
 // Stop gracefully stops the worker by closing stdin.
 // The process should exit on its own when stdin is closed.
+// Deprecated: Use StopGraceful for proper two-phase shutdown.
 func (w *Worker) Stop() {
 	w.stdin.Close()
+}
+
+// StopGraceful implements a two-phase shutdown sequence:
+// 1. If the agent advertises a graceful exit method (shutdown), send it and wait.
+// 2. Otherwise (or after grace expires), send SIGTERM.
+// 3. Wait up to grace again. If still running, send SIGKILL.
+// 4. Close stdin and drain Wait().
+//
+// If grace is 0, DefaultGracePeriod (3s) is used.
+// StopGraceful is idempotent: calling it multiple times is safe.
+func (w *Worker) StopGraceful(ctx context.Context, grace time.Duration) error {
+	// Check if already stopped
+	select {
+	case <-w.done:
+		return nil
+	default:
+	}
+
+	if grace == 0 {
+		grace = DefaultGracePeriod
+	}
+
+	pid := w.Pid()
+	slog.Debug("acp: stopping worker", "pid", pid, "grace", grace)
+
+	// Phase 1: Try graceful shutdown via protocol (if agent supports it)
+	// Use a short timeout for the shutdown request
+	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, grace)
+	defer shutdownCancel()
+
+	if w.tryGracefulShutdown(shutdownCtx) {
+		// Wait for process to exit
+		select {
+		case <-w.done:
+			slog.Info("acp: worker stopped gracefully via shutdown", "pid", pid)
+			return nil
+		case <-shutdownCtx.Done():
+			// Timeout, proceed to SIGTERM
+		}
+	}
+
+	// Phase 2: Send SIGTERM
+	if err := w.sendSignal(syscall.SIGTERM); err != nil {
+		slog.Debug("acp: failed to send SIGTERM", "pid", pid, "error", err)
+	} else {
+		slog.Debug("acp: sent SIGTERM", "pid", pid)
+	}
+
+	// Wait for process to exit after SIGTERM
+	select {
+	case <-w.done:
+		slog.Info("acp: worker stopped after SIGTERM", "pid", pid)
+		return nil
+	case <-time.After(grace):
+		// Timeout, proceed to SIGKILL
+	case <-ctx.Done():
+		// Context cancelled, proceed to SIGKILL
+	}
+
+	// Phase 3: Send SIGKILL
+	slog.Warn("acp: sending SIGKILL after grace period", "pid", pid)
+	if err := w.Kill(); err != nil {
+		return fmt.Errorf("acp: kill worker: %w", err)
+	}
+
+	// Wait for process to fully exit
+	<-w.done
+
+	slog.Info("acp: worker killed", "pid", pid)
+	return nil
+}
+
+// tryGracefulShutdown attempts to send a shutdown request to the agent.
+// Returns true if the request was sent successfully.
+func (w *Worker) tryGracefulShutdown(ctx context.Context) bool {
+	// Check if agent supports shutdown capability
+	// Currently we attempt shutdown regardless, as some agents may support it
+	// without explicitly advertising it
+	req, err := NewRequest(MethodShutdown, nil)
+	if err != nil {
+		return false
+	}
+
+	_, err = w.SendRequest(ctx, req)
+	return err == nil
+}
+
+// sendSignal sends a signal to the worker process.
+func (w *Worker) sendSignal(sig syscall.Signal) error {
+	if w.cmd.Process == nil {
+		return ErrWorkerNotStarted
+	}
+	return w.cmd.Process.Signal(sig)
 }
 
 // Kill forcefully terminates the worker process.

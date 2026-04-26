@@ -170,8 +170,16 @@ func run() error {
 	acpRegistry := acp.NewRegistry(acp.DefaultConfig())
 	activeSession.SetACPRegistry(acpRegistry)
 
-	// Ensure ACP workers are stopped on exit.
+	// Ensure ACP workers are stopped on exit (graceful shutdown, SIGINT/SIGTERM, or panic).
+	// Use a fresh context (not the canceled signal context) so children can be reaped.
 	defer func() {
+		// Handle panics: ensure workers are stopped even if panic occurs
+		if r := recover(); r != nil {
+			log.Printf("Panic recovered in main: %v", r)
+			// Re-panic after cleanup
+			defer panic(r)
+		}
+
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := acpRegistry.StopAll(shutdownCtx); err != nil {
@@ -185,6 +193,7 @@ func run() error {
 		ProjectRepo:   projectRepo,
 		TaskRepo:      taskRepo,
 		ActiveSession: activeSession,
+		ACPRegistry:   acpRegistry,
 	}
 	if err := repl.RegisterSessionCommands(cmdRegistry, sessionCmdDeps); err != nil {
 		return fmt.Errorf("register session commands: %w", err)

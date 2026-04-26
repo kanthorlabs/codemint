@@ -13,12 +13,13 @@ const JSONRPCVersion = "2.0"
 
 // Method constants for ACP communication.
 const (
-	MethodInitialize         = "initialize"
-	MethodSessionNew         = "session/new"
-	MethodSessionPrompt      = "session/prompt"
-	MethodSessionCancel      = "session/cancel"
-	MethodSessionUpdate      = "session/update"
-	MethodRequestPermission  = "session/request_permission"
+	MethodInitialize        = "initialize"
+	MethodShutdown          = "shutdown"
+	MethodSessionNew        = "session/new"
+	MethodSessionPrompt     = "session/prompt"
+	MethodSessionCancel     = "session/cancel"
+	MethodSessionUpdate     = "session/update"
+	MethodRequestPermission = "session/request_permission"
 )
 
 // UpdateKind constants for session update notifications.

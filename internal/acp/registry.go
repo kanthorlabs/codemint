@@ -159,27 +159,9 @@ func (r *Registry) Count() int {
 	return count
 }
 
-// stopWorker gracefully stops a worker with timeout.
+// stopWorker gracefully stops a worker using two-phase shutdown.
 func (r *Registry) stopWorker(ctx context.Context, worker *Worker) error {
-	pid := worker.Pid()
-
-	// Close stdin to signal graceful shutdown
-	worker.Stop()
-
-	// Wait for process to exit with timeout
-	select {
-	case <-worker.Done():
-		slog.Info("acp: worker stopped", "pid", pid)
-		return nil
-	case <-ctx.Done():
-		// Context cancelled, force kill
-		slog.Warn("acp: killing worker after context cancel", "pid", pid)
-		return worker.Kill()
-	case <-time.After(DefaultStopTimeout):
-		// Timeout, force kill
-		slog.Warn("acp: killing worker after timeout", "pid", pid)
-		return worker.Kill()
-	}
+	return worker.StopGraceful(ctx, DefaultStopTimeout)
 }
 
 // watchWorker monitors a worker and removes it from the registry when it exits.

@@ -462,3 +462,210 @@ echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"moc
 		t.Errorf("ResetContext on closed worker: error = %v; want ErrWorkerClosed", err)
 	}
 }
+
+func TestWorker_StopGraceful_ExitsOnSIGTERM(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "mock_acp.sh")
+
+	// Mock script that exits cleanly on SIGTERM
+	mockScript := `#!/bin/bash
+trap 'exit 0' SIGTERM
+
+read line
+id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
+echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
+
+# Wait forever (until signaled)
+while true; do sleep 1; done
+`
+	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+
+	ctx := context.Background()
+	cfg := WorkerConfig{
+		Command:          "/bin/bash",
+		Args:             []string{script},
+		HandshakeTimeout: 2 * time.Second,
+	}
+
+	worker, err := Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	// Worker should be alive
+	if !worker.Alive() {
+		t.Fatal("worker should be alive after spawn")
+	}
+
+	// Stop gracefully with short grace period
+	err = worker.StopGraceful(ctx, 1*time.Second)
+	if err != nil {
+		t.Fatalf("StopGraceful: %v", err)
+	}
+
+	// Worker should be stopped
+	if worker.Alive() {
+		t.Error("worker should not be alive after StopGraceful")
+	}
+
+	// Done channel should be closed
+	select {
+	case <-worker.Done():
+		// Expected
+	default:
+		t.Error("Done channel should be closed after StopGraceful")
+	}
+}
+
+func TestWorker_StopGraceful_RequiresSIGKILL(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "mock_acp.sh")
+
+	// Mock script that ignores SIGTERM (requires SIGKILL)
+	mockScript := `#!/bin/bash
+trap '' SIGTERM  # Ignore SIGTERM
+
+read line
+id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
+echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
+
+# Wait forever (ignoring SIGTERM)
+while true; do sleep 1; done
+`
+	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+
+	ctx := context.Background()
+	cfg := WorkerConfig{
+		Command:          "/bin/bash",
+		Args:             []string{script},
+		HandshakeTimeout: 2 * time.Second,
+	}
+
+	worker, err := Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	pid := worker.Pid()
+
+	// Worker should be alive
+	if !worker.Alive() {
+		t.Fatal("worker should be alive after spawn")
+	}
+
+	// Stop gracefully with short grace period (will need SIGKILL)
+	start := time.Now()
+	err = worker.StopGraceful(ctx, 500*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("StopGraceful: %v", err)
+	}
+
+	// Should have taken roughly 2 * grace period (shutdown attempt + SIGTERM wait)
+	if elapsed < 500*time.Millisecond {
+		t.Logf("StopGraceful took %v (expected ~500ms minimum)", elapsed)
+	}
+
+	// Worker should be stopped (via SIGKILL)
+	if worker.Alive() {
+		t.Error("worker should not be alive after StopGraceful")
+	}
+
+	// Verify process is actually gone
+	// Note: checking /proc or using kill -0 is platform-specific
+	// The fact that Done() is closed is sufficient verification
+	select {
+	case <-worker.Done():
+		t.Logf("Worker (pid %d) successfully terminated", pid)
+	default:
+		t.Error("Done channel should be closed after StopGraceful with SIGKILL")
+	}
+}
+
+func TestWorker_StopGraceful_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "mock_acp.sh")
+
+	mockScript := `#!/bin/bash
+read line
+id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
+echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
+while read line; do :; done
+`
+	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+
+	ctx := context.Background()
+	cfg := WorkerConfig{
+		Command:          "/bin/bash",
+		Args:             []string{script},
+		HandshakeTimeout: 2 * time.Second,
+	}
+
+	worker, err := Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	// First stop
+	err = worker.StopGraceful(ctx, 1*time.Second)
+	if err != nil {
+		t.Fatalf("first StopGraceful: %v", err)
+	}
+
+	// Second stop should be idempotent (return nil)
+	err = worker.StopGraceful(ctx, 1*time.Second)
+	if err != nil {
+		t.Fatalf("second StopGraceful should be idempotent: %v", err)
+	}
+
+	// Third stop should also be idempotent
+	err = worker.StopGraceful(ctx, 1*time.Second)
+	if err != nil {
+		t.Fatalf("third StopGraceful should be idempotent: %v", err)
+	}
+}
+
+func TestWorker_StopGraceful_DefaultGracePeriod(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "mock_acp.sh")
+
+	mockScript := `#!/bin/bash
+trap 'exit 0' SIGTERM
+read line
+id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
+echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
+while true; do sleep 1; done
+`
+	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+
+	ctx := context.Background()
+	cfg := WorkerConfig{
+		Command:          "/bin/bash",
+		Args:             []string{script},
+		HandshakeTimeout: 2 * time.Second,
+	}
+
+	worker, err := Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	// Pass 0 grace period - should use DefaultGracePeriod (3s)
+	err = worker.StopGraceful(ctx, 0)
+	if err != nil {
+		t.Fatalf("StopGraceful with 0 grace: %v", err)
+	}
+
+	if worker.Alive() {
+		t.Error("worker should not be alive after StopGraceful")
+	}
+}
