@@ -39,6 +39,9 @@ type ActiveSession struct {
 	// acpSessionID is the ACP session ID for the current session's worker.
 	// This is the session ID returned by session/new from the ACP agent.
 	ACPSessionID string
+	// Verbosity controls how much output is shown in the TUI.
+	// 0 = Task (everything), 1 = Story (no thinking), 2 = Epic (minimal).
+	Verbosity int
 }
 
 // GetClientMode satisfies registry.ActiveSessionInfo.
@@ -113,8 +116,21 @@ func (a *ActiveSession) SetACPSessionID(id string) {
 	a.ACPSessionID = id
 }
 
+// GetVerbosity returns the current verbosity level.
+func (a *ActiveSession) GetVerbosity() int {
+	return a.Verbosity
+}
+
+// SetVerbosity sets the verbosity level.
+func (a *ActiveSession) SetVerbosity(level int) {
+	a.Verbosity = level
+}
+
 // Compile-time assertion: *ActiveSession must satisfy registry.ActiveSessionInfo.
 var _ registry.ActiveSessionInfo = (*ActiveSession)(nil)
 
 // Compile-time assertion: *ActiveSession must satisfy registry.MutableSessionInfo.
 var _ registry.MutableSessionInfo = (*ActiveSession)(nil)
+
+// Compile-time assertion: *ActiveSession must satisfy registry.VerbositySessionInfo.
+var _ registry.VerbositySessionInfo = (*ActiveSession)(nil)

@@ -165,7 +165,20 @@ func run() error {
 	// Create active session from load result.
 	activeSession := sessionLoader.CreateActiveSession(loadResult, clientMode)
 
-	// Step 11b: Create ACP worker registry.
+	// Step 11b: Create and register TUI adapter for high-bandwidth streaming.
+	// The adapter reads verbosity from the session dynamically.
+	tuiAdapter := ui.NewTUIAdapter(ui.TUIAdapterConfig{
+		Writer: os.Stdout,
+		VerbosityGetter: func() ui.VerbosityLevel {
+			return ui.VerbosityLevel(activeSession.GetVerbosity())
+		},
+	})
+	mediator.RegisterAdapter(tuiAdapter)
+
+	// Ensure TUI adapter is stopped on exit.
+	defer tuiAdapter.Stop()
+
+	// Step 11c: Create ACP worker registry.
 	// The registry is created lazily - workers are only spawned when needed.
 	acpRegistry := acp.NewRegistry(acp.DefaultConfig())
 	activeSession.SetACPRegistry(acpRegistry)
@@ -205,6 +218,14 @@ func run() error {
 	}
 	if err := repl.RegisterModeCommands(cmdRegistry, modeCmdDeps); err != nil {
 		return fmt.Errorf("register mode commands: %w", err)
+	}
+
+	// Register verbosity commands.
+	verbosityCmdDeps := &repl.VerbosityCommandDeps{
+		ActiveSession: activeSession,
+	}
+	if err := repl.RegisterVerbosityCommands(cmdRegistry, verbosityCmdDeps); err != nil {
+		return fmt.Errorf("register verbosity commands: %w", err)
 	}
 
 	// Register ACP commands.

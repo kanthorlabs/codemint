@@ -91,6 +91,16 @@ type MutableSessionInfo interface {
 	SetClientMode(mode ClientMode)
 }
 
+// VerbositySessionInfo extends ActiveSessionInfo with verbosity control.
+// Used by commands that need to read or modify the verbosity level.
+type VerbositySessionInfo interface {
+	ActiveSessionInfo
+	// GetVerbosity returns the current verbosity level (0=Task, 1=Story, 2=Epic).
+	GetVerbosity() int
+	// SetVerbosity sets the verbosity level.
+	SetVerbosity(level int)
+}
+
 // Handler is the unified signature for all slash-command implementations.
 // active provides read-only session context; args are shell-tokenised
 // arguments; rawArgs is the untouched argument string for System Assistant
