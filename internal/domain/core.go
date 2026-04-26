@@ -3,6 +3,7 @@
 package domain
 
 import (
+	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 
@@ -122,10 +123,10 @@ type ProjectPermission struct {
 
 // Agent represents an actor that can be assigned tasks.
 type Agent struct {
-	ID        string    `db:"id"`
-	Name      string    `db:"name"`
-	Type      AgentType `db:"type"`
-	Assistant string    `db:"assistant"`
+	ID        string         `db:"id"`
+	Name      string         `db:"name"`
+	Type      AgentType      `db:"type"`
+	Assistant sql.NullString `db:"assistant"`
 }
 
 // Session is a single execution instance tied to a project.
@@ -150,22 +151,30 @@ const DefaultTaskTimeout int64 = 3_600_000
 // Input and Output are stored as JSON text in SQLite; callers may
 // json.Unmarshal them into concrete types as needed.
 type Task struct {
-	ID         string     `db:"id"`
-	ProjectID  string     `db:"project_id"`
-	SessionID  string     `db:"session_id"`
-	WorkflowID string     `db:"workflow_id"`
-	AssigneeID string     `db:"assignee_id"`
-	SeqEpic    int        `db:"seq_epic"`
-	SeqStory   int        `db:"seq_story"`
-	SeqTask    int        `db:"seq_task"`
-	Type       TaskType   `db:"type"`
-	Status     TaskStatus `db:"status"`
+	ID         string         `db:"id"`
+	ProjectID  string         `db:"project_id"`
+	SessionID  string         `db:"session_id"`
+	WorkflowID sql.NullString `db:"workflow_id"`
+	AssigneeID string         `db:"assignee_id"`
+	SeqEpic    int            `db:"seq_epic"`
+	SeqStory   int            `db:"seq_story"`
+	SeqTask    int            `db:"seq_task"`
+	Type       TaskType       `db:"type"`
+	Status     TaskStatus     `db:"status"`
 	// Timeout is the maximum duration in milliseconds the agent is allowed to
 	// run before the process is killed and the task is transitioned to Failure.
 	// Defaults to DefaultTaskTimeout (1 hour) when not explicitly set.
-	Timeout int64  `db:"timeout"`
-	Input   string `db:"input"`
-	Output  string `db:"output"`
+	Timeout int64          `db:"timeout"`
+	Input   sql.NullString `db:"input"`
+	Output  sql.NullString `db:"output"`
+}
+
+// --- Null Helpers ---
+
+// NewNullString creates a sql.NullString from a string.
+// If the string is empty, Valid is false (representing NULL).
+func NewNullString(s string) sql.NullString {
+	return sql.NullString{String: s, Valid: s != ""}
 }
 
 // --- Factory Constructors ---
@@ -194,7 +203,7 @@ func NewAgent(name string, agentType AgentType, assistant string) *Agent {
 		ID:        idgen.MustNew(),
 		Name:      name,
 		Type:      agentType,
-		Assistant: assistant,
+		Assistant: sql.NullString{String: assistant, Valid: assistant != ""},
 	}
 }
 
@@ -224,7 +233,7 @@ func NewTask(projectID, sessionID, workflowID, assigneeID string, taskType TaskT
 		ID:         idgen.MustNew(),
 		ProjectID:  projectID,
 		SessionID:  sessionID,
-		WorkflowID: workflowID,
+		WorkflowID: sql.NullString{String: workflowID, Valid: workflowID != ""},
 		AssigneeID: assigneeID,
 		Type:       taskType,
 		Status:     TaskStatusPending,

@@ -61,7 +61,7 @@ var _ repository.TaskRepository = (*taskRepo)(nil)
 // given session, ordered hierarchically by (seq_epic, seq_story, seq_task).
 func (r *taskRepo) Next(ctx context.Context, sessionID string) (*domain.Task, error) {
 	const query = `
-		SELECT id, project_id, session_id, COALESCE(workflow_id, '') as workflow_id, assignee_id,
+		SELECT id, project_id, session_id, workflow_id, assignee_id,
 		       seq_epic, seq_story, seq_task, type, status, timeout, input, output
 		FROM task
 		WHERE session_id = ?
@@ -122,8 +122,11 @@ func (r *taskRepo) UpdateStatus(ctx context.Context, taskID string, status domai
 		placeholders,
 	)
 
+	// Convert output to NullString: empty string → NULL in database.
+	outputValue := domain.NewNullString(output)
+
 	args := make([]any, 0, 3+len(allowed))
-	args = append(args, int(status), output, taskID)
+	args = append(args, int(status), outputValue, taskID)
 	for _, s := range allowed {
 		args = append(args, int(s))
 	}
@@ -143,7 +146,7 @@ func (r *taskRepo) UpdateStatus(ctx context.Context, taskID string, status domai
 // wrapping sql.ErrNoRows (as a descriptive message) when no matching row exists.
 func (r *taskRepo) FindByID(ctx context.Context, taskID string) (*domain.Task, error) {
 	const query = `
-		SELECT id, project_id, session_id, COALESCE(workflow_id, '') as workflow_id, assignee_id,
+		SELECT id, project_id, session_id, workflow_id, assignee_id,
 		       seq_epic, seq_story, seq_task, type, status, timeout, input, output
 		FROM task
 		WHERE id = ?`
@@ -196,7 +199,7 @@ func (r *taskRepo) UpdateTaskStatus(ctx context.Context, taskID string, status d
 // the Processing (1) state, indicating the process may have crashed mid-execution.
 func (r *taskRepo) FindInterrupted(ctx context.Context, sessionID string) ([]*domain.Task, error) {
 	const query = `
-		SELECT id, project_id, session_id, COALESCE(workflow_id, '') as workflow_id, assignee_id,
+		SELECT id, project_id, session_id, workflow_id, assignee_id,
 		       seq_epic, seq_story, seq_task, type, status, timeout, input, output
 		FROM task
 		WHERE session_id = ?

@@ -87,3 +87,61 @@ func TestEnsureSystemAgents_Idempotent(t *testing.T) {
 		t.Errorf("expected 2 agents after idempotent seeding, got %d", count)
 	}
 }
+
+// TestNullableAssistant_SystemAgents asserts that system agents have NULL
+// assistant (sql.NullString with Valid == false).
+func TestNullableAssistant_SystemAgents(t *testing.T) {
+	conn := openTestDB(t)
+	repo := NewAgentRepo(conn)
+	ctx := context.Background()
+
+	if err := repo.EnsureSystemAgents(ctx); err != nil {
+		t.Fatalf("EnsureSystemAgents returned error: %v", err)
+	}
+
+	// System agent "human" should have NULL assistant.
+	agent, err := repo.FindByName(ctx, "human")
+	if err != nil {
+		t.Fatalf("FindByName(human) error: %v", err)
+	}
+	if agent == nil {
+		t.Fatal("expected agent 'human' to exist, got nil")
+	}
+	if agent.Assistant.Valid {
+		t.Errorf("expected Assistant.Valid == false for system agent, got true with value %q",
+			agent.Assistant.String)
+	}
+}
+
+// TestNullableAssistant_NonNull asserts that agents with configured assistants
+// have sql.NullString with Valid == true.
+func TestNullableAssistant_NonNull(t *testing.T) {
+	conn := openTestDB(t)
+	ctx := context.Background()
+
+	// Insert an agent with a non-NULL assistant.
+	agentID := "test-agent-id"
+	assistantName := "opencode"
+	_, err := conn.ExecContext(ctx,
+		`INSERT INTO agent (id, name, type, assistant) VALUES (?, ?, ?, ?)`,
+		agentID, "ai-agent", 1, assistantName,
+	)
+	if err != nil {
+		t.Fatalf("insert agent: %v", err)
+	}
+
+	repo := NewAgentRepo(conn)
+	agent, err := repo.FindByName(ctx, "ai-agent")
+	if err != nil {
+		t.Fatalf("FindByName(ai-agent) error: %v", err)
+	}
+	if agent == nil {
+		t.Fatal("expected agent 'ai-agent' to exist, got nil")
+	}
+	if !agent.Assistant.Valid {
+		t.Error("expected Assistant.Valid == true for agent with assistant, got false")
+	}
+	if agent.Assistant.String != assistantName {
+		t.Errorf("Assistant.String: got %q, want %q", agent.Assistant.String, assistantName)
+	}
+}

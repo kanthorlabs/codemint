@@ -23,6 +23,7 @@
 - [Testing](#testing)
 - [Security and Cryptography](#security-and-cryptography)
 - [Performance](#performance)
+- [Database](#database)
 
 ---
 
@@ -1148,6 +1149,100 @@ GOEXPERIMENT=goroutineleakprofile go build
 ```
 
 Access via `/debug/pprof/goroutineleak`.
+
+---
+
+## Database
+
+### Nullable Columns
+
+Use `sql.Null<Type>` wrappers for nullable database columns. Never use bare Go types (e.g., `string`, `int`) for nullable columns — this creates ambiguity between NULL and zero values.
+
+```go
+import "database/sql"
+
+type Task struct {
+    ID         string         `db:"id"`          // NOT NULL - use string
+    WorkflowID sql.NullString `db:"workflow_id"` // NULLABLE - use NullString
+    Priority   sql.NullInt64  `db:"priority"`    // NULLABLE - use NullInt64
+}
+```
+
+**Available types:**
+- `sql.NullString` - nullable TEXT/VARCHAR
+- `sql.NullInt64` - nullable INTEGER/BIGINT
+- `sql.NullInt32` - nullable INTEGER
+- `sql.NullFloat64` - nullable REAL/DOUBLE
+- `sql.NullBool` - nullable BOOLEAN
+- `sql.NullTime` - nullable TIMESTAMP
+
+### Checking and Accessing Null Values
+
+```go
+// Check if value is present
+if task.WorkflowID.Valid {
+    fmt.Println(task.WorkflowID.String)
+}
+
+// Create nullable value
+workflowID := sql.NullString{String: id, Valid: id != ""}
+
+// Helper function pattern
+func NewNullString(s string) sql.NullString {
+    return sql.NullString{String: s, Valid: s != ""}
+}
+```
+
+### Custom Nullable Types
+
+For JSON columns, define custom types implementing `sql.Scanner` and `driver.Valuer`:
+
+```go
+type NullableJSON json.RawMessage
+
+func (n *NullableJSON) Scan(value any) error {
+    if value == nil {
+        *n = nil
+        return nil
+    }
+    switch v := value.(type) {
+    case []byte:
+        *n = NullableJSON(v)
+    case string:
+        *n = NullableJSON(v)
+    }
+    return nil
+}
+
+func (n NullableJSON) Value() (driver.Value, error) {
+    if n == nil {
+        return nil, nil
+    }
+    return []byte(n), nil
+}
+```
+
+### Avoid COALESCE Workarounds
+
+Do not use `COALESCE(column, '')` to convert NULL to empty string in SQL. This masks NULL handling bugs and creates inconsistency between database and Go representations.
+
+```go
+// Bad - hides NULL with COALESCE
+const query = `SELECT COALESCE(workflow_id, '') as workflow_id FROM task`
+
+// Good - let sqlx handle NullString
+const query = `SELECT workflow_id FROM task`
+```
+
+### SQLite Connection Pragmas
+
+Configure SQLite connections for reliability:
+
+```go
+dsn := "file:app.db?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=ON"
+db, _ := sqlx.Connect("sqlite", dsn)
+db.SetMaxOpenConns(1) // Prevent locking issues
+```
 
 ---
 

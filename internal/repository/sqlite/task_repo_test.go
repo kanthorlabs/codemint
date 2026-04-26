@@ -49,9 +49,18 @@ func insertRawTask(t *testing.T, repo *taskRepo, task *domain.Task) {
 		timeout = domain.DefaultTaskTimeout
 	}
 	// Use NULL for empty workflow_id to avoid foreign key constraint failures.
+	// Convert NullString fields to appropriate SQL values.
 	var workflowID any
-	if task.WorkflowID != "" {
-		workflowID = task.WorkflowID
+	if task.WorkflowID.Valid {
+		workflowID = task.WorkflowID.String
+	}
+	var input any
+	if task.Input.Valid {
+		input = task.Input.String
+	}
+	var output any
+	if task.Output.Valid {
+		output = task.Output.String
 	}
 	_, err := repo.db.ExecContext(ctx, `
 		INSERT INTO task
@@ -62,7 +71,7 @@ func insertRawTask(t *testing.T, repo *taskRepo, task *domain.Task) {
 		task.SeqEpic, task.SeqStory, task.SeqTask,
 		int(task.Type), int(task.Status),
 		timeout,
-		string(task.Input), string(task.Output),
+		input, output,
 	)
 	if err != nil {
 		t.Fatalf("insertRawTask %q: %v", task.ID, err)
@@ -521,5 +530,175 @@ func TestUpdateAssignee_NotFound(t *testing.T) {
 	err := repo.UpdateAssignee(context.Background(), idgen.MustNew(), idgen.MustNew())
 	if err == nil {
 		t.Fatal("expected error for non-existent task, got nil")
+	}
+}
+
+// TestNullableFields_WorkflowID asserts that sql.NullString properly handles
+// NULL workflow_id values scanned from the database.
+func TestNullableFields_WorkflowID(t *testing.T) {
+	repo, projectID, sessionID, agentID := setupTaskFixtures(t)
+	ctx := context.Background()
+
+	// Insert task with NULL workflow_id directly via SQL.
+	taskID := idgen.MustNew()
+	_, err := repo.db.ExecContext(ctx, `
+		INSERT INTO task
+		  (id, project_id, session_id, workflow_id, assignee_id,
+		   seq_epic, seq_story, seq_task, type, status, timeout, input, output)
+		VALUES (?, ?, ?, NULL, ?, 1, 1, 1, 0, 0, ?, NULL, NULL)`,
+		taskID, projectID, sessionID, agentID, domain.DefaultTaskTimeout,
+	)
+	if err != nil {
+		t.Fatalf("insert task with NULL workflow_id: %v", err)
+	}
+
+	// Query via TaskRepository.
+	task, err := repo.FindByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("FindByID returned error: %v", err)
+	}
+
+	// Assert WorkflowID.Valid == false for NULL.
+	if task.WorkflowID.Valid {
+		t.Errorf("expected WorkflowID.Valid == false for NULL, got true with value %q",
+			task.WorkflowID.String)
+	}
+}
+
+// TestNullableFields_WorkflowID_NonNull asserts that sql.NullString properly
+// handles non-NULL workflow_id values.
+func TestNullableFields_WorkflowID_NonNull(t *testing.T) {
+	repo, projectID, sessionID, agentID := setupTaskFixtures(t)
+	ctx := context.Background()
+
+	// Create a workflow to reference.
+	workflowID := idgen.MustNew()
+	_, err := repo.db.ExecContext(ctx,
+		`INSERT INTO workflow (id, session_id, type) VALUES (?, ?, ?)`,
+		workflowID, sessionID, 0,
+	)
+	if err != nil {
+		t.Fatalf("insert workflow: %v", err)
+	}
+
+	// Insert task with valid workflow_id.
+	taskID := idgen.MustNew()
+	_, err = repo.db.ExecContext(ctx, `
+		INSERT INTO task
+		  (id, project_id, session_id, workflow_id, assignee_id,
+		   seq_epic, seq_story, seq_task, type, status, timeout, input, output)
+		VALUES (?, ?, ?, ?, ?, 1, 1, 1, 0, 0, ?, NULL, NULL)`,
+		taskID, projectID, sessionID, workflowID, agentID, domain.DefaultTaskTimeout,
+	)
+	if err != nil {
+		t.Fatalf("insert task with workflow_id: %v", err)
+	}
+
+	// Query via TaskRepository.
+	task, err := repo.FindByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("FindByID returned error: %v", err)
+	}
+
+	// Assert WorkflowID.Valid == true and value matches.
+	if !task.WorkflowID.Valid {
+		t.Error("expected WorkflowID.Valid == true for non-NULL, got false")
+	}
+	if task.WorkflowID.String != workflowID {
+		t.Errorf("WorkflowID.String: got %q, want %q", task.WorkflowID.String, workflowID)
+	}
+}
+
+// TestNullableFields_InputOutput asserts that sql.NullString handles NULL and
+// non-NULL input/output values correctly.
+func TestNullableFields_InputOutput(t *testing.T) {
+	repo, projectID, sessionID, agentID := setupTaskFixtures(t)
+	ctx := context.Background()
+
+	// Insert task with NULL input and output.
+	taskID := idgen.MustNew()
+	_, err := repo.db.ExecContext(ctx, `
+		INSERT INTO task
+		  (id, project_id, session_id, workflow_id, assignee_id,
+		   seq_epic, seq_story, seq_task, type, status, timeout, input, output)
+		VALUES (?, ?, ?, NULL, ?, 1, 1, 1, 0, 0, ?, NULL, NULL)`,
+		taskID, projectID, sessionID, agentID, domain.DefaultTaskTimeout,
+	)
+	if err != nil {
+		t.Fatalf("insert task: %v", err)
+	}
+
+	task, err := repo.FindByID(ctx, taskID)
+	if err != nil {
+		t.Fatalf("FindByID returned error: %v", err)
+	}
+
+	// Both Input and Output should be NULL (Valid == false).
+	if task.Input.Valid {
+		t.Errorf("expected Input.Valid == false for NULL, got true with value %q", task.Input.String)
+	}
+	if task.Output.Valid {
+		t.Errorf("expected Output.Valid == false for NULL, got true with value %q", task.Output.String)
+	}
+}
+
+// TestUpdateStatus_StoresNullForEmptyOutput asserts that UpdateStatus stores
+// NULL for empty output strings.
+func TestUpdateStatus_StoresNullForEmptyOutput(t *testing.T) {
+	repo, projectID, sessionID, agentID := setupTaskFixtures(t)
+	ctx := context.Background()
+
+	task := &domain.Task{
+		ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+		AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 1,
+		Type: domain.TaskTypeCoding, Status: domain.TaskStatusProcessing,
+	}
+	insertRawTask(t, repo, task)
+
+	// Update with empty output → should store NULL.
+	if err := repo.UpdateStatus(ctx, task.ID, domain.TaskStatusSuccess, ""); err != nil {
+		t.Fatalf("UpdateStatus returned error: %v", err)
+	}
+
+	// Verify output is NULL in database.
+	var output any
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT output FROM task WHERE id = ?`, task.ID,
+	).Scan(&output); err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	if output != nil {
+		t.Errorf("expected NULL output, got %v", output)
+	}
+}
+
+// TestUpdateStatus_StoresValueForNonEmptyOutput asserts that UpdateStatus
+// stores the actual value for non-empty output strings.
+func TestUpdateStatus_StoresValueForNonEmptyOutput(t *testing.T) {
+	repo, projectID, sessionID, agentID := setupTaskFixtures(t)
+	ctx := context.Background()
+
+	task := &domain.Task{
+		ID: idgen.MustNew(), ProjectID: projectID, SessionID: sessionID,
+		AssigneeID: agentID, SeqEpic: 1, SeqStory: 1, SeqTask: 1,
+		Type: domain.TaskTypeCoding, Status: domain.TaskStatusProcessing,
+	}
+	insertRawTask(t, repo, task)
+
+	// Update with non-empty output.
+	expectedOutput := `{"result": "success"}`
+	if err := repo.UpdateStatus(ctx, task.ID, domain.TaskStatusSuccess, expectedOutput); err != nil {
+		t.Fatalf("UpdateStatus returned error: %v", err)
+	}
+
+	// Verify output is stored correctly.
+	var output string
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT output FROM task WHERE id = ?`, task.ID,
+	).Scan(&output); err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	if output != expectedOutput {
+		t.Errorf("output: got %q, want %q", output, expectedOutput)
 	}
 }

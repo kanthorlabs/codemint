@@ -36,7 +36,8 @@ func (r *agentRepo) EnsureSystemAgents(ctx context.Context) error {
 
 	for _, a := range systemAgents {
 		id := idgen.MustNew()
-		if _, err := r.db.ExecContext(ctx, query, id, a.Name, int(a.Type), ""); err != nil {
+		// System agents have no assistant configured; store NULL via sql.NullString.
+		if _, err := r.db.ExecContext(ctx, query, id, a.Name, int(a.Type), a.Assistant); err != nil {
 			return fmt.Errorf("sqlite: ensure system agent %q: %w", a.Name, err)
 		}
 	}
