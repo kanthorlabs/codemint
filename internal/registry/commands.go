@@ -144,6 +144,9 @@ const (
 	// EventSessionReclaimed indicates a suspended client has reclaimed the session.
 	// The payload contains the reclaiming client's ID.
 	EventSessionReclaimed UIEventType = "session_reclaimed"
+	// EventACPStream indicates a classified event from the ACP agent stream.
+	// The payload is an acp.Event struct carrying Kind, Raw, etc.
+	EventACPStream UIEventType = "acp_stream"
 )
 
 // UIEvent represents a fire-and-forget notification broadcast to all UI
