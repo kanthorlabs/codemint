@@ -166,18 +166,22 @@ func run() error {
 	// Create active session from load result.
 	activeSession := sessionLoader.CreateActiveSession(loadResult, clientMode)
 
-	// Step 11b: Create and register TUI adapter for high-bandwidth streaming.
-	// The adapter reads verbosity from the session dynamically.
-	tuiAdapter := ui.NewTUIAdapter(ui.TUIAdapterConfig{
+	// Step 11b: Create and register UI adapters based on client mode.
+	// CLI mode: TUIAdapter for high-bandwidth terminal streaming.
+	// Daemon mode: CUIAdapter for low-bandwidth pulse notifications.
+	adapters, err := ui.BuildAdapters(clientMode, ui.AdapterConfig{
 		Writer: os.Stdout,
 		VerbosityGetter: func() ui.VerbosityLevel {
 			return ui.VerbosityLevel(activeSession.GetVerbosity())
 		},
 	})
-	mediator.RegisterAdapter(tuiAdapter)
+	if err != nil {
+		return fmt.Errorf("build ui adapters: %w", err)
+	}
+	adapters.RegisterAll(mediator)
 
-	// Ensure TUI adapter is stopped on exit.
-	defer tuiAdapter.Stop()
+	// Ensure adapters are closed on exit.
+	defer adapters.Close()
 
 	// Step 11c: Create ACP worker registry and Runtime (Story 3.12).
 	// The registry is created lazily - workers are only spawned when needed.
@@ -256,6 +260,18 @@ func run() error {
 	}
 	if err := repl.RegisterVerbosityCommands(cmdRegistry, verbosityCmdDeps); err != nil {
 		return fmt.Errorf("register verbosity commands: %w", err)
+	}
+
+	// Register daemon commands (/tasks, /status, /approve, /deny).
+	// CUIAdapter is passed from AdapterSet - only set in daemon mode.
+	daemonCmdDeps := &repl.DaemonCommandDeps{
+		TaskRepo:      taskRepo,
+		ActiveSession: activeSession,
+		ACPRegistry:   acpRegistry,
+		CUIAdapter:    adapters.CUI, // nil in CLI mode, set in daemon mode
+	}
+	if err := repl.RegisterDaemonCommands(cmdRegistry, daemonCmdDeps); err != nil {
+		return fmt.Errorf("register daemon commands: %w", err)
 	}
 
 	// Register ACP commands with the full Runtime (Story 3.12).

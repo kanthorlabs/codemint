@@ -354,3 +354,83 @@ func TestCUIAdapter_ListPendingPrompts(t *testing.T) {
 		t.Errorf("expected 0 pending prompts after cancel, got %d", len(prompts))
 	}
 }
+
+// mockPusher is a test pusher that records messages.
+type mockPusher struct {
+	messages []string
+	err      error
+}
+
+func (m *mockPusher) Push(ctx context.Context, msg string) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.messages = append(m.messages, msg)
+	return nil
+}
+
+// TestCUIAdapter_DefaultPusher_LogsOnly verifies that the default pusher does not panic.
+func TestCUIAdapter_DefaultPusher_LogsOnly(t *testing.T) {
+	adapter := NewCUIAdapter(CUIAdapterConfig{})
+	defer adapter.Close()
+
+	// This should not panic - events go to log file only (default noopPusher).
+	adapter.NotifyEvent(registry.UIEvent{
+		Type:    registry.EventSessionTakeover,
+		Message: "Test takeover event",
+	})
+
+	// Give time for async processing.
+	time.Sleep(50 * time.Millisecond)
+}
+
+// TestCUIAdapter_SetPusher verifies that SetPusher changes the pusher.
+func TestCUIAdapter_SetPusher(t *testing.T) {
+	adapter := NewCUIAdapter(CUIAdapterConfig{})
+	defer adapter.Close()
+
+	pusher := &mockPusher{}
+	adapter.SetPusher(pusher)
+
+	// Send an event that should be forwarded.
+	adapter.NotifyEvent(registry.UIEvent{
+		Type:    registry.EventSessionTakeover,
+		Message: "Test takeover",
+	})
+
+	// Give time for async processing.
+	time.Sleep(50 * time.Millisecond)
+
+	if len(pusher.messages) != 1 {
+		t.Errorf("expected 1 pushed message, got %d", len(pusher.messages))
+	}
+}
+
+// TestCUIAdapter_SetPusher_Nil verifies that setting nil pusher resets to noop.
+func TestCUIAdapter_SetPusher_Nil(t *testing.T) {
+	adapter := NewCUIAdapter(CUIAdapterConfig{})
+	defer adapter.Close()
+
+	pusher := &mockPusher{}
+	adapter.SetPusher(pusher)
+	adapter.SetPusher(nil) // Reset to noop.
+
+	// Send an event that should be forwarded.
+	adapter.NotifyEvent(registry.UIEvent{
+		Type:    registry.EventSessionTakeover,
+		Message: "Test takeover",
+	})
+
+	// Give time for async processing.
+	time.Sleep(50 * time.Millisecond)
+
+	// The mock pusher should not receive messages since we reset to noop.
+	if len(pusher.messages) != 0 {
+		t.Errorf("expected 0 pushed messages after reset, got %d", len(pusher.messages))
+	}
+}
+
+// TestNoopPusher_SatisfiesInterface is a compile-time check.
+func TestNoopPusher_SatisfiesInterface(t *testing.T) {
+	var _ NotificationPusher = noopPusher{}
+}

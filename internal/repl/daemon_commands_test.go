@@ -229,7 +229,7 @@ func TestStatusHandler_WithSession(t *testing.T) {
 	}
 }
 
-// TestApproveHandler_NoAdapter tests /approve without CUIAdapter.
+// TestApproveHandler_NoAdapter tests /approve without CUIAdapter (CLI mode).
 func TestApproveHandler_NoAdapter(t *testing.T) {
 	deps := &DaemonCommandDeps{
 		CUIAdapter: nil,
@@ -242,7 +242,7 @@ func TestApproveHandler_NoAdapter(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !contains(result.Message, "Approval not available") {
+	if !contains(result.Message, "--mode=daemon") {
 		t.Errorf("unexpected message: %s", result.Message)
 	}
 }
@@ -289,7 +289,7 @@ func TestApproveHandler_NotFound(t *testing.T) {
 	}
 }
 
-// TestDenyHandler_NoAdapter tests /deny without CUIAdapter.
+// TestDenyHandler_NoAdapter tests /deny without CUIAdapter (CLI mode).
 func TestDenyHandler_NoAdapter(t *testing.T) {
 	deps := &DaemonCommandDeps{
 		CUIAdapter: nil,
@@ -302,7 +302,7 @@ func TestDenyHandler_NoAdapter(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !contains(result.Message, "Approval not available") {
+	if !contains(result.Message, "--mode=daemon") {
 		t.Errorf("unexpected message: %s", result.Message)
 	}
 }

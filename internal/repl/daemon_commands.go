@@ -319,7 +319,7 @@ func approveHandler(deps *DaemonCommandDeps) registry.Handler {
 	return func(ctx context.Context, active registry.ActiveSessionInfo, args []string, _ string) (registry.CommandResult, error) {
 		if deps.CUIAdapter == nil {
 			return registry.CommandResult{
-				Message: "Approval not available in this mode.",
+				Message: "Run with --mode=daemon to use this command.",
 				Action:  registry.ActionNone,
 			}, nil
 		}
@@ -361,7 +361,7 @@ func denyHandler(deps *DaemonCommandDeps) registry.Handler {
 	return func(ctx context.Context, active registry.ActiveSessionInfo, args []string, _ string) (registry.CommandResult, error) {
 		if deps.CUIAdapter == nil {
 			return registry.CommandResult{
-				Message: "Approval not available in this mode.",
+				Message: "Run with --mode=daemon to use this command.",
 				Action:  registry.ActionNone,
 			}, nil
 		}

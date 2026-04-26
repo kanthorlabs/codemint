@@ -30,6 +30,11 @@ import (
 //   - EventACPStream (micro-events: thinking, tool_update, etc.)
 //   - EventProgress
 //   - All other non-terminal events
+//
+// Push Notifications:
+// The CUIAdapter supports pluggable notification pushers via SetPusher().
+// By default, notifications are written to the log file only. EPIC-04 will
+// plug Telegram/Slack pushers into this seam for external notifications.
 type CUIAdapter struct {
 	logger *slog.Logger
 	logMu  sync.Mutex
@@ -40,7 +45,31 @@ type CUIAdapter struct {
 	pendingPrompts   map[int]*pendingPrompt
 	pendingPromptsMu sync.RWMutex
 	nextPromptID     int
+
+	// pusher sends notifications to external systems (Telegram, Slack, etc.).
+	// Default is noopPusher which only logs to file.
+	pusher   NotificationPusher
+	pusherMu sync.RWMutex
 }
+
+// NotificationPusher defines the interface for sending push notifications
+// to external systems (Telegram, Slack, etc.). EPIC-04 will implement
+// concrete pushers for various chat platforms.
+type NotificationPusher interface {
+	// Push sends a notification message to the external system.
+	// The context can be used for cancellation and timeouts.
+	Push(ctx context.Context, msg string) error
+}
+
+// noopPusher is the default pusher that does nothing (logging is handled separately).
+type noopPusher struct{}
+
+func (noopPusher) Push(ctx context.Context, msg string) error {
+	return nil
+}
+
+// Compile-time check that noopPusher satisfies NotificationPusher.
+var _ NotificationPusher = noopPusher{}
 
 // pendingPrompt tracks a prompt awaiting user response via /approve or /deny.
 type pendingPrompt struct {
@@ -64,6 +93,7 @@ func NewCUIAdapter(cfg CUIAdapterConfig) *CUIAdapter {
 		logger:         logger,
 		pendingPrompts: make(map[int]*pendingPrompt),
 		nextPromptID:   1,
+		pusher:         noopPusher{}, // Default to no-op; EPIC-04 will set real pusher.
 	}
 
 	// Initialize the log file for daemon mode.
@@ -72,6 +102,26 @@ func NewCUIAdapter(cfg CUIAdapterConfig) *CUIAdapter {
 	}
 
 	return a
+}
+
+// SetPusher sets the notification pusher for external notifications.
+// Use this to plug in Telegram, Slack, or other chat platform pushers.
+// Pass nil to reset to the default no-op pusher.
+func (a *CUIAdapter) SetPusher(p NotificationPusher) {
+	a.pusherMu.Lock()
+	defer a.pusherMu.Unlock()
+	if p == nil {
+		a.pusher = noopPusher{}
+	} else {
+		a.pusher = p
+	}
+}
+
+// getPusher returns the current notification pusher (thread-safe).
+func (a *CUIAdapter) getPusher() NotificationPusher {
+	a.pusherMu.RLock()
+	defer a.pusherMu.RUnlock()
+	return a.pusher
 }
 
 // initLogFile creates the state directory and opens the CUI log file.
@@ -191,7 +241,7 @@ func (a *CUIAdapter) formatEvent(event registry.UIEvent) string {
 	}
 }
 
-// writeLog writes a message to the CUI log file.
+// writeLog writes a message to the CUI log file and sends it to the pusher.
 func (a *CUIAdapter) writeLog(msg string) {
 	a.logMu.Lock()
 	defer a.logMu.Unlock()
@@ -199,12 +249,18 @@ func (a *CUIAdapter) writeLog(msg string) {
 	if a.logFd == nil {
 		// Log file not initialized; fall back to slog.
 		a.logger.Info("cui_event", slog.String("message", msg))
-		return
+	} else {
+		_, err := fmt.Fprintln(a.logFd, msg)
+		if err != nil {
+			a.logger.Warn("cui: failed to write to log", slog.String("error", err.Error()))
+		}
 	}
 
-	_, err := fmt.Fprintln(a.logFd, msg)
-	if err != nil {
-		a.logger.Warn("cui: failed to write to log", slog.String("error", err.Error()))
+	// Send to pusher for external notifications.
+	// Use background context since this is fire-and-forget.
+	pusher := a.getPusher()
+	if err := pusher.Push(context.Background(), msg); err != nil {
+		a.logger.Warn("cui: failed to push notification", slog.String("error", err.Error()))
 	}
 }
 
