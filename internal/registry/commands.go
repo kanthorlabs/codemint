@@ -151,6 +151,11 @@ const (
 	// based on the project's permission whitelist. The payload contains command
 	// details and execution result for audit purposes.
 	EventACPAutoApproved UIEventType = "acp_auto_approved"
+	// EventACPAwaitingApproval indicates a command requires human approval.
+	// The payload contains the pending approval details.
+	EventACPAwaitingApproval UIEventType = "acp_awaiting_approval"
+	// EventACPApprovalResolved indicates a pending approval was resolved (approved/denied).
+	EventACPApprovalResolved UIEventType = "acp_approval_resolved"
 )
 
 // UIEvent represents a fire-and-forget notification broadcast to all UI
@@ -167,18 +172,50 @@ type UIEvent struct {
 	Payload any
 }
 
+// PromptKind categorizes the type of decision prompt.
+type PromptKind string
+
+const (
+	// PromptKindGeneral is a general-purpose prompt (default).
+	PromptKindGeneral PromptKind = "general"
+	// PromptKindACPCommandApproval is used for ACP blocked/unknown command approval.
+	PromptKindACPCommandApproval PromptKind = "acp_command_approval"
+)
+
+// PromptOption represents a selectable choice in a decision prompt.
+type PromptOption struct {
+	ID          string // Unique identifier for programmatic handling
+	Label       string // Human-readable display text
+	Description string // Optional detailed explanation
+}
+
 // PromptRequest contains the information needed to display a decision prompt
 // to the user across multiple UI adapters.
 type PromptRequest struct {
-	TaskID  string
+	// Kind categorizes the type of prompt (e.g., "acp_command_approval").
+	Kind PromptKind
+	// TaskID is the task this prompt relates to (optional, may be empty).
+	TaskID string
+	// Title is a short header for the prompt.
+	Title string
+	// Body is the main content/question being asked.
+	Body string
+	// Message is a human-readable description (legacy field, prefer Body).
 	Message string
+	// Options are the selectable choices (legacy field, prefer PromptOptions).
 	Options []string // e.g., ["Accept", "Revert"]
+	// PromptOptions are structured choices with ID, Label, and Description.
+	PromptOptions []PromptOption
 }
 
 // PromptResponse carries the user's selected option from a UI adapter.
 type PromptResponse struct {
+	// SelectedOption is the label of the selected option (legacy).
 	SelectedOption string
-	Error          error
+	// SelectedOptionID is the ID of the selected PromptOption.
+	SelectedOptionID string
+	// Error is set if the prompt failed or was cancelled.
+	Error error
 }
 
 // UIMediator abstracts all user-facing output and system interactions so that

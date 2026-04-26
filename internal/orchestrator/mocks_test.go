@@ -14,6 +14,14 @@ type mockUIMediator struct {
 	mu       sync.Mutex
 	messages []string
 	events   []registry.UIEvent
+
+	// promptResponse is the response to return from PromptDecision.
+	// If nil, returns the first option.
+	promptResponse *registry.PromptResponse
+	// promptRequests captures all prompt requests for testing.
+	promptRequests []registry.PromptRequest
+	// blockOnPrompt if true, blocks until context is cancelled.
+	blockOnPrompt bool
 }
 
 func (m *mockUIMediator) RenderMessage(msg string) {
@@ -31,7 +39,40 @@ func (m *mockUIMediator) NotifyAll(event registry.UIEvent) {
 }
 
 func (m *mockUIMediator) PromptDecision(ctx context.Context, req registry.PromptRequest) registry.PromptResponse {
-	return registry.PromptResponse{SelectedOption: req.Options[0]}
+	m.mu.Lock()
+	m.promptRequests = append(m.promptRequests, req)
+	response := m.promptResponse
+	shouldBlock := m.blockOnPrompt
+	m.mu.Unlock()
+
+	// If shouldBlock is true, wait for context to be done (simulate user delay/timeout)
+	if shouldBlock {
+		<-ctx.Done()
+		return registry.PromptResponse{Error: ctx.Err()}
+	}
+
+	// Check if context is already cancelled
+	select {
+	case <-ctx.Done():
+		return registry.PromptResponse{Error: ctx.Err()}
+	default:
+	}
+
+	if response != nil {
+		return *response
+	}
+
+	// Return first option by default (legacy behavior)
+	if len(req.Options) > 0 {
+		return registry.PromptResponse{SelectedOption: req.Options[0]}
+	}
+	if len(req.PromptOptions) > 0 {
+		return registry.PromptResponse{
+			SelectedOption:   req.PromptOptions[0].Label,
+			SelectedOptionID: req.PromptOptions[0].ID,
+		}
+	}
+	return registry.PromptResponse{}
 }
 
 func (m *mockUIMediator) Messages() []string {
@@ -44,6 +85,24 @@ func (m *mockUIMediator) Events() []registry.UIEvent {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]registry.UIEvent(nil), m.events...)
+}
+
+func (m *mockUIMediator) PromptRequests() []registry.PromptRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]registry.PromptRequest(nil), m.promptRequests...)
+}
+
+func (m *mockUIMediator) SetPromptResponse(resp *registry.PromptResponse) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.promptResponse = resp
+}
+
+func (m *mockUIMediator) SetBlockOnPrompt(block bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.blockOnPrompt = block
 }
 
 // interceptorMockPermissionRepo implements ProjectPermissionRepository for testing.
@@ -63,10 +122,20 @@ func (m *interceptorMockPermissionRepo) Upsert(ctx context.Context, perm *domain
 
 // interceptorMockTaskRepo implements minimal TaskRepository for testing.
 type interceptorMockTaskRepo struct {
-	tasks []*domain.Task
+	mu              sync.Mutex
+	tasks           []*domain.Task
+	statusUpdates   []statusUpdate
+	statusUpdateErr error
+}
+
+type statusUpdate struct {
+	TaskID string
+	Status domain.TaskStatus
 }
 
 func (m *interceptorMockTaskRepo) Create(ctx context.Context, task *domain.Task) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.tasks = append(m.tasks, task)
 	return nil
 }
@@ -88,7 +157,10 @@ func (m *interceptorMockTaskRepo) UpdateStatus(ctx context.Context, id string, s
 }
 
 func (m *interceptorMockTaskRepo) UpdateTaskStatus(ctx context.Context, id string, status domain.TaskStatus) error {
-	return nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.statusUpdates = append(m.statusUpdates, statusUpdate{TaskID: id, Status: status})
+	return m.statusUpdateErr
 }
 
 func (m *interceptorMockTaskRepo) UpdateAssignee(ctx context.Context, id string, assigneeID string) error {
@@ -101,6 +173,12 @@ func (m *interceptorMockTaskRepo) FindInterrupted(ctx context.Context, sessionID
 
 func (m *interceptorMockTaskRepo) ListCoordinationAfter(ctx context.Context, sessionID, afterTaskID string) ([]*domain.Task, error) {
 	return nil, nil
+}
+
+func (m *interceptorMockTaskRepo) StatusUpdates() []statusUpdate {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]statusUpdate(nil), m.statusUpdates...)
 }
 
 // interceptorMockAgentRepo implements minimal AgentRepository for testing.
