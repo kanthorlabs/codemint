@@ -3,10 +3,16 @@
 package orchestrator
 
 import (
+	"sync"
+
 	"codemint.kanthorlabs.com/internal/acp"
 	"codemint.kanthorlabs.com/internal/domain"
 	"codemint.kanthorlabs.com/internal/registry"
 )
+
+// ProjectSwitchCallback is called when the active project changes.
+// The callback receives the new project (may be nil if switching to global mode).
+type ProjectSwitchCallback func(*domain.Project)
 
 // ActiveSession holds the runtime state for the current user session. It is
 // consulted by the Dispatcher to determine how to route natural-language input
@@ -36,12 +42,18 @@ type ActiveSession struct {
 	LastSeenTaskID string
 	// acpRegistry is the ACP worker registry for managing agent processes.
 	acpRegistry *acp.Registry
+	// acpRuntime is the ACP Runtime for pipeline management (Story 3.12).
+	acpRuntime *Runtime
 	// acpSessionID is the ACP session ID for the current session's worker.
 	// This is the session ID returned by session/new from the ACP agent.
 	ACPSessionID string
 	// Verbosity controls how much output is shown in the TUI.
 	// 0 = Task (everything), 1 = Story (no thinking), 2 = Epic (minimal).
 	Verbosity int
+
+	// projectSwitchCallbacks are invoked when the project changes.
+	projectSwitchCallbacks []ProjectSwitchCallback
+	projectSwitchMu        sync.RWMutex
 }
 
 // GetClientMode satisfies registry.ActiveSessionInfo.
@@ -62,18 +74,36 @@ func (a *ActiveSession) GetSessionID() string {
 func (a *ActiveSession) GetClientID() string { return a.ClientID }
 
 // SetSession satisfies registry.MutableSessionInfo.
+// It also fires any registered project switch callbacks if the project changes.
 func (a *ActiveSession) SetSession(session any, project any, yoloEnabled bool) {
+	oldProjectID := ""
+	if a.Project != nil {
+		oldProjectID = a.Project.ID
+	}
+
 	if session == nil {
 		a.Session = nil
 		a.Project = nil
 		a.IsGlobal = true
 		a.YoloEnabled = false
+
+		// Fire callbacks if project changed.
+		if oldProjectID != "" {
+			a.fireProjectSwitchCallbacks(nil)
+		}
 		return
 	}
+
+	newProject := project.(*domain.Project)
 	a.Session = session.(*domain.Session)
-	a.Project = project.(*domain.Project)
+	a.Project = newProject
 	a.IsGlobal = false
 	a.YoloEnabled = yoloEnabled
+
+	// Fire callbacks if project changed.
+	if oldProjectID != newProject.ID {
+		a.fireProjectSwitchCallbacks(newProject)
+	}
 }
 
 // SetSuspended satisfies registry.MutableSessionInfo.
@@ -124,6 +154,36 @@ func (a *ActiveSession) GetVerbosity() int {
 // SetVerbosity sets the verbosity level.
 func (a *ActiveSession) SetVerbosity(level int) {
 	a.Verbosity = level
+}
+
+// SetACPRuntime sets the ACP Runtime for this session (Story 3.12).
+func (a *ActiveSession) SetACPRuntime(rt *Runtime) {
+	a.acpRuntime = rt
+}
+
+// ACPRuntime returns the ACP Runtime, or nil if not set.
+func (a *ActiveSession) ACPRuntime() *Runtime {
+	return a.acpRuntime
+}
+
+// OnProjectSwitch registers a callback that is invoked when the active project changes.
+// The callback receives the new project (may be nil if switching to global mode).
+// This is used by the Runtime to reload permissions when the project changes (Task 3.12.3).
+func (a *ActiveSession) OnProjectSwitch(fn ProjectSwitchCallback) {
+	a.projectSwitchMu.Lock()
+	defer a.projectSwitchMu.Unlock()
+	a.projectSwitchCallbacks = append(a.projectSwitchCallbacks, fn)
+}
+
+// fireProjectSwitchCallbacks invokes all registered project switch callbacks.
+func (a *ActiveSession) fireProjectSwitchCallbacks(project *domain.Project) {
+	a.projectSwitchMu.RLock()
+	callbacks := a.projectSwitchCallbacks
+	a.projectSwitchMu.RUnlock()
+
+	for _, cb := range callbacks {
+		cb(project)
+	}
 }
 
 // Compile-time assertion: *ActiveSession must satisfy registry.ActiveSessionInfo.

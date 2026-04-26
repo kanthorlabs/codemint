@@ -28,6 +28,22 @@ type ACPSessionInfo interface {
 	SetACPSessionID(id string)
 }
 
+// ACPRuntimeProvider provides access to the ACP Runtime (Story 3.12).
+// This is a separate interface to avoid breaking existing code.
+type ACPRuntimeProvider interface {
+	// ACPRuntime returns the ACP Runtime, or nil if not set.
+	ACPRuntime() ACPRuntime
+}
+
+// ACPRuntime is the interface for the ACP Runtime used by commands.
+// This avoids a direct dependency on the orchestrator package.
+type ACPRuntime interface {
+	// BufferRegistry returns the event buffer registry for /summary.
+	BufferRegistry() *acp.BufferRegistry
+	// AttachWorker attaches a worker to the session and starts the pipeline consumer.
+	AttachWorker(ctx context.Context, sess *domain.Session, project *domain.Project) (*acp.Worker, error)
+}
+
 // ACPCommandDeps holds the dependencies needed for ACP-related commands.
 type ACPCommandDeps struct {
 	ActiveSession  ACPSessionInfo
@@ -35,6 +51,10 @@ type ACPCommandDeps struct {
 	AgentRepo      repository.AgentRepository
 	UIMediator     registry.UIMediator
 	BufferRegistry *acp.BufferRegistry
+	// ACPRuntime is the Runtime for pipeline management (Story 3.12).
+	// If set, /acp uses AttachWorker which sets up the full pipeline.
+	// If nil, falls back to the legacy path using ACPRegistry.GetOrSpawn directly.
+	ACPRuntime ACPRuntime
 }
 
 // RegisterACPCommands registers ACP worker commands (/acp, /acp-status, /acp-stop, /acp-reset, /summary).
@@ -109,22 +129,35 @@ func acpPromptHandler(deps *ACPCommandDeps) registry.Handler {
 
 		project := deps.ActiveSession.GetProject()
 
-		// Get the ACP registry.
-		acpReg := deps.ActiveSession.ACPRegistry()
-		if acpReg == nil {
-			return registry.CommandResult{
-				Message: "ACP registry not available.",
-				Action:  registry.ActionNone,
-			}, nil
-		}
+		// Try to use the Runtime's AttachWorker if available (Story 3.12).
+		// This sets up the full pipeline (Interceptor, StatusMapper, Fanout, BufferRegistry).
+		var worker *acp.Worker
+		var err error
 
-		// Get or spawn the worker.
-		worker, err := acpReg.GetOrSpawn(ctx, session, project)
-		if err != nil {
-			return registry.CommandResult{
-				Message: fmt.Sprintf("Failed to start ACP worker: %v", err),
-				Action:  registry.ActionNone,
-			}, nil
+		if deps.ACPRuntime != nil {
+			worker, err = deps.ACPRuntime.AttachWorker(ctx, session, project)
+			if err != nil {
+				return registry.CommandResult{
+					Message: fmt.Sprintf("Failed to attach ACP worker: %v", err),
+					Action:  registry.ActionNone,
+				}, nil
+			}
+		} else {
+			// Fall back to the registry directly (legacy path).
+			acpReg := deps.ActiveSession.ACPRegistry()
+			if acpReg == nil {
+				return registry.CommandResult{
+					Message: "ACP registry not available.",
+					Action:  registry.ActionNone,
+				}, nil
+			}
+			worker, err = acpReg.GetOrSpawn(ctx, session, project)
+			if err != nil {
+				return registry.CommandResult{
+					Message: fmt.Sprintf("Failed to start ACP worker: %v", err),
+					Action:  registry.ActionNone,
+				}, nil
+			}
 		}
 
 		// Create a new ACP session if we don't have one.
@@ -517,8 +550,17 @@ func summaryHandler(deps *ACPCommandDeps) registry.Handler {
 			}, nil
 		}
 
+		// Get buffer registry from ACPRuntime if available, otherwise from deps.
+		var bufferReg *acp.BufferRegistry
+		if deps.ACPRuntime != nil {
+			bufferReg = deps.ACPRuntime.BufferRegistry()
+		}
+		if bufferReg == nil {
+			bufferReg = deps.BufferRegistry
+		}
+
 		// Check if buffer registry is available.
-		if deps.BufferRegistry == nil {
+		if bufferReg == nil {
 			return registry.CommandResult{
 				Message: "Event buffer not available.",
 				Action:  registry.ActionNone,
@@ -541,7 +583,7 @@ func summaryHandler(deps *ACPCommandDeps) registry.Handler {
 		}
 
 		// Get the snapshot from the buffer.
-		snapshot := deps.BufferRegistry.Snapshot(session.ID, taskID)
+		snapshot := bufferReg.Snapshot(session.ID, taskID)
 		if len(snapshot) == 0 {
 			if taskID != "" {
 				return registry.CommandResult{

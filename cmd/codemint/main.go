@@ -17,6 +17,7 @@ import (
 	"codemint.kanthorlabs.com/internal/acp"
 	appconfig "codemint.kanthorlabs.com/internal/config"
 	"codemint.kanthorlabs.com/internal/db"
+	"codemint.kanthorlabs.com/internal/domain"
 	"codemint.kanthorlabs.com/internal/orchestrator"
 	"codemint.kanthorlabs.com/internal/registry"
 	"codemint.kanthorlabs.com/internal/repl"
@@ -178,12 +179,38 @@ func run() error {
 	// Ensure TUI adapter is stopped on exit.
 	defer tuiAdapter.Stop()
 
-	// Step 11c: Create ACP worker registry.
+	// Step 11c: Create ACP worker registry and Runtime (Story 3.12).
 	// The registry is created lazily - workers are only spawned when needed.
+	// The Runtime wires together Pipeline, Interceptor, StatusMapper, Fanout, and BufferRegistry.
 	acpRegistry := acp.NewRegistry(acp.DefaultConfig())
-	activeSession.SetACPRegistry(acpRegistry)
+	permissionRepo := sqlite.NewProjectPermissionRepo(dbConn)
+	bufferRegistry := acp.NewBufferRegistry(acp.DefaultBufferCapacity)
 
-	// Ensure ACP workers are stopped on exit (graceful shutdown, SIGINT/SIGTERM, or panic).
+	acpRuntime := orchestrator.NewRuntime(orchestrator.RuntimeConfig{
+		Registry:       acpRegistry,
+		BufferRegistry: bufferRegistry,
+		Mediator:       mediator,
+		PermissionRepo: permissionRepo,
+		TaskRepo:       taskRepo,
+		SessionRepo:    sessionRepo,
+		AgentRepo:      agentRepo,
+	})
+
+	activeSession.SetACPRegistry(acpRegistry)
+	activeSession.SetACPRuntime(acpRuntime)
+
+	// Register callback to refresh permissions when the project changes (Task 3.12.3).
+	activeSession.OnProjectSwitch(func(project *domain.Project) {
+		if project == nil {
+			return
+		}
+		// Refresh permissions for the new project.
+		if err := acpRuntime.RefreshPermissions(context.Background(), project.ID); err != nil {
+			log.Printf("Warning: failed to refresh permissions for project %s: %v", project.ID, err)
+		}
+	})
+
+	// Ensure ACP workers and consumers are stopped on exit (graceful shutdown, SIGINT/SIGTERM, or panic).
 	// Use a fresh context (not the canceled signal context) so children can be reaped.
 	defer func() {
 		// Handle panics: ensure workers are stopped even if panic occurs
@@ -193,10 +220,10 @@ func run() error {
 			defer panic(r)
 		}
 
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := acpRegistry.StopAll(shutdownCtx); err != nil {
-			log.Printf("Warning: failed to stop ACP workers: %v", err)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := acpRuntime.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Warning: failed to shutdown ACP runtime: %v", err)
 		}
 	}()
 
@@ -228,12 +255,14 @@ func run() error {
 		return fmt.Errorf("register verbosity commands: %w", err)
 	}
 
-	// Register ACP commands.
+	// Register ACP commands with the full Runtime (Story 3.12).
 	acpCmdDeps := &repl.ACPCommandDeps{
-		ActiveSession: activeSession,
-		TaskRepo:      taskRepo,
-		AgentRepo:     agentRepo,
-		UIMediator:    mediator,
+		ActiveSession:  activeSession,
+		TaskRepo:       taskRepo,
+		AgentRepo:      agentRepo,
+		UIMediator:     mediator,
+		BufferRegistry: bufferRegistry,
+		ACPRuntime:     acpRuntime,
 	}
 	if err := repl.RegisterACPCommands(cmdRegistry, acpCmdDeps); err != nil {
 		return fmt.Errorf("register acp commands: %w", err)
