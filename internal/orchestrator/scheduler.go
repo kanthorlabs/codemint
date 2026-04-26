@@ -23,14 +23,21 @@ type Scheduler struct {
 	// lastSeqStory tracks the seq_story of the last processed task.
 	// Reset to -1 on scheduler initialization to force reset on first task.
 	lastSeqStory int
+
+	// advanceCh receives signals from StatusMapper when a task completes successfully.
+	// When a signal is received, the scheduler advances to the next pending task.
+	advanceCh <-chan struct{}
 }
 
 // NewScheduler creates a new Scheduler with the provided dependencies.
+// The advanceCh parameter receives signals to advance to the next task (from StatusMapper).
+// Pass nil if you want the scheduler to run in single-task mode.
 func NewScheduler(
 	taskRepo repository.TaskRepository,
 	executor *Executor,
 	acpRegistry *acp.Registry,
 	activeSession *ActiveSession,
+	advanceCh <-chan struct{},
 ) *Scheduler {
 	return &Scheduler{
 		taskRepo:      taskRepo,
@@ -38,6 +45,7 @@ func NewScheduler(
 		acpRegistry:   acpRegistry,
 		activeSession: activeSession,
 		lastSeqStory:  -1, // Force reset on first task after restart
+		advanceCh:     advanceCh,
 	}
 }
 
@@ -70,8 +78,13 @@ func (s *Scheduler) ProcessNextTask(ctx context.Context) (*domain.Task, error) {
 		// The agent will just use more tokens.
 	}
 
+	// Set the current task ID on the worker for StatusMapper (Story 3.7).
+	s.setCurrentTaskOnWorker(task.ID)
+
 	// Hand off to the executor.
 	if err := s.executor.ExecuteTask(ctx, task); err != nil {
+		// Clear the current task on error.
+		s.setCurrentTaskOnWorker("")
 		return task, err
 	}
 
@@ -136,8 +149,26 @@ func (s *Scheduler) maybeResetContext(ctx context.Context, task *domain.Task) er
 	return nil
 }
 
+// setCurrentTaskOnWorker sets the current task ID on the ACP worker.
+// This allows StatusMapper to associate events with the correct task.
+func (s *Scheduler) setCurrentTaskOnWorker(taskID string) {
+	session := s.activeSession.GetSession()
+	if session == nil || s.acpRegistry == nil {
+		return
+	}
+
+	worker, ok := s.acpRegistry.Get(session.ID)
+	if !ok || !worker.Alive() {
+		return
+	}
+
+	worker.SetCurrentTask(taskID)
+}
+
 // Run starts the scheduler loop that continuously processes tasks.
-// It runs until the context is cancelled.
+// It runs until the context is cancelled. When advanceCh is provided,
+// the scheduler waits for signals from StatusMapper before processing
+// the next task (Task 3.7.3).
 func (s *Scheduler) Run(ctx context.Context) error {
 	for {
 		select {
@@ -153,10 +184,31 @@ func (s *Scheduler) Run(ctx context.Context) error {
 				continue
 			}
 			if task == nil {
-				// No pending tasks, wait briefly before checking again.
-				// In production, this would use a notification mechanism
-				// rather than polling. For now, return and let caller decide.
+				// No pending tasks.
+				if s.advanceCh != nil {
+					// Wait for advance signal or context cancellation.
+					slog.Info("acp scheduler idle")
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-s.advanceCh:
+						// Received signal to advance, loop continues.
+						continue
+					}
+				}
+				// No advance channel, return and let caller decide.
 				return nil
+			}
+
+			// If we have an advance channel, wait for the task to complete
+			// before processing the next one (signal comes from StatusMapper).
+			if s.advanceCh != nil {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-s.advanceCh:
+					// Task completed, loop continues to next task.
+				}
 			}
 		}
 	}

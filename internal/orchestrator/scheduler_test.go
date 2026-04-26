@@ -119,7 +119,7 @@ func TestScheduler_StoryBoundaryDetection(t *testing.T) {
 	}
 	activeSession.SetACPSessionID("initial-session")
 
-	scheduler := NewScheduler(taskRepo, executor, nil, activeSession)
+	scheduler := NewScheduler(taskRepo, executor, nil, activeSession, nil)
 
 	// Override the maybeResetContext for testing since we can't easily mock acp.Registry
 	// Instead, we'll test the boundary detection logic directly
@@ -202,7 +202,7 @@ func TestScheduler_SkipResetForCoordination(t *testing.T) {
 	}
 	activeSession.SetACPSessionID("initial-session")
 
-	scheduler := NewScheduler(nil, nil, nil, activeSession)
+	scheduler := NewScheduler(nil, nil, nil, activeSession, nil)
 	scheduler.lastSeqStory = 1 // Start at story 1
 
 	ctx := context.Background()
@@ -251,7 +251,7 @@ func TestScheduler_SkipResetForConfirmation(t *testing.T) {
 	}
 	activeSession.SetACPSessionID("initial-session")
 
-	scheduler := NewScheduler(nil, nil, nil, activeSession)
+	scheduler := NewScheduler(nil, nil, nil, activeSession, nil)
 	scheduler.lastSeqStory = 1 // Start at story 1
 
 	ctx := context.Background()
@@ -289,7 +289,7 @@ func TestScheduler_ResetOnCodingTask(t *testing.T) {
 	activeSession.SetACPSessionID("initial-session")
 
 	// Create scheduler without registry (simulates no worker)
-	scheduler := NewScheduler(nil, nil, nil, activeSession)
+	scheduler := NewScheduler(nil, nil, nil, activeSession, nil)
 	scheduler.lastSeqStory = 1 // Start at story 1
 
 	ctx := context.Background()
@@ -329,7 +329,7 @@ func TestScheduler_NoResetWithinSameStory(t *testing.T) {
 	// Create a mock registry with a worker
 	acpRegistry := acp.NewRegistry(acp.WorkerConfig{})
 
-	scheduler := NewScheduler(nil, nil, acpRegistry, activeSession)
+	scheduler := NewScheduler(nil, nil, acpRegistry, activeSession, nil)
 	scheduler.lastSeqStory = 2 // Same story
 
 	ctx := context.Background()

@@ -75,6 +75,11 @@ type Worker struct {
 
 	// Capabilities from initialize handshake
 	capabilities InitializeResult
+
+	// currentTaskID is the ID of the task currently being processed by this worker.
+	// Empty string for ad-hoc /acp prompts. Used by StatusMapper (Story 3.7).
+	currentTaskID   string
+	currentTaskIDMu sync.RWMutex
 }
 
 // Spawn creates and starts a new ACP worker process.
@@ -244,6 +249,23 @@ func (w *Worker) Cwd() string {
 // Capabilities returns the server capabilities from the initialize handshake.
 func (w *Worker) Capabilities() InitializeResult {
 	return w.capabilities
+}
+
+// SetCurrentTask sets the ID of the task currently being processed by this worker.
+// Pass empty string when the task is completed or for ad-hoc /acp prompts.
+// This is used by StatusMapper (Story 3.7) to associate ACP events with tasks.
+func (w *Worker) SetCurrentTask(taskID string) {
+	w.currentTaskIDMu.Lock()
+	defer w.currentTaskIDMu.Unlock()
+	w.currentTaskID = taskID
+}
+
+// CurrentTaskID returns the ID of the task currently being processed.
+// Returns empty string if no task is being processed (ad-hoc /acp prompts).
+func (w *Worker) CurrentTaskID() string {
+	w.currentTaskIDMu.RLock()
+	defer w.currentTaskIDMu.RUnlock()
+	return w.currentTaskID
 }
 
 // Wait blocks until the worker process exits and returns the exit error.

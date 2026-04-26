@@ -156,6 +156,9 @@ const (
 	EventACPAwaitingApproval UIEventType = "acp_awaiting_approval"
 	// EventACPApprovalResolved indicates a pending approval was resolved (approved/denied).
 	EventACPApprovalResolved UIEventType = "acp_approval_resolved"
+	// EventTaskStatusChanged indicates a task status transition occurred.
+	// The payload contains TaskID, From, To, and Reason fields.
+	EventTaskStatusChanged UIEventType = "task_status_changed"
 )
 
 // UIEvent represents a fire-and-forget notification broadcast to all UI
