@@ -5,11 +5,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"codemint.kanthorlabs.com/internal/acp"
 	"codemint.kanthorlabs.com/internal/domain"
 	"codemint.kanthorlabs.com/internal/registry"
+	"codemint.kanthorlabs.com/internal/repository"
 	"codemint.kanthorlabs.com/internal/util/idgen"
 )
 
@@ -94,6 +99,110 @@ func (m *mockUI) PromptDecision(_ context.Context, req registry.PromptRequest) r
 	m.promptRequestCalled = true
 	m.lastPromptRequest = req
 	return m.promptResponse
+}
+
+// --- ACP Mocks for Task 3.15 Tests ---
+
+// mockWorker simulates an ACP worker for testing.
+type mockWorker struct {
+	mu            sync.Mutex
+	sentMessages  []*acp.Message
+	currentTaskID string
+	alive         bool
+}
+
+func newMockWorker() *mockWorker {
+	return &mockWorker{
+		sentMessages: make([]*acp.Message, 0),
+		alive:        true,
+	}
+}
+
+func (m *mockWorker) Send(msg *acp.Message) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sentMessages = append(m.sentMessages, msg)
+	return nil
+}
+
+func (m *mockWorker) SetCurrentTask(taskID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.currentTaskID = taskID
+}
+
+func (m *mockWorker) CurrentTaskID() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.currentTaskID
+}
+
+func (m *mockWorker) Alive() bool {
+	return m.alive
+}
+
+func (m *mockWorker) GetSentMessages() []*acp.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]*acp.Message, len(m.sentMessages))
+	copy(result, m.sentMessages)
+	return result
+}
+
+// mockACPRegistry simulates the ACP registry for testing.
+type mockACPRegistry struct {
+	workers map[string]*mockWorker
+}
+
+func newMockACPRegistry() *mockACPRegistry {
+	return &mockACPRegistry{
+		workers: make(map[string]*mockWorker),
+	}
+}
+
+func (m *mockACPRegistry) Get(sessionID string) (*acp.Worker, bool) {
+	// This doesn't return the real *acp.Worker, we need a different approach.
+	// Since we can't mock *acp.Worker directly (it's a concrete type),
+	// we'll need to test at a higher level or use integration tests.
+	return nil, false
+}
+
+func (m *mockACPRegistry) AddMockWorker(sessionID string) *mockWorker {
+	worker := newMockWorker()
+	m.workers[sessionID] = worker
+	return worker
+}
+
+// mockPermissionRepo implements repository.ProjectPermissionRepository for testing.
+type mockPermissionRepo struct {
+	permissions *domain.ProjectPermission
+}
+
+func (m *mockPermissionRepo) FindByProjectID(_ context.Context, _ string) (*domain.ProjectPermission, error) {
+	return m.permissions, nil
+}
+
+func (m *mockPermissionRepo) Upsert(_ context.Context, _ *domain.ProjectPermission) error {
+	return nil
+}
+
+// mockSessionRepo implements repository.SessionRepository for testing.
+type mockSessionRepo struct{}
+
+func (m *mockSessionRepo) Create(_ context.Context, _ *domain.Session) error            { return nil }
+func (m *mockSessionRepo) FindByID(_ context.Context, _ string) (*domain.Session, error) { return nil, nil }
+func (m *mockSessionRepo) FindActiveByProjectID(_ context.Context, _ string) (*domain.Session, error) {
+	return nil, nil
+}
+func (m *mockSessionRepo) Archive(_ context.Context, _ string) error                    { return nil }
+func (m *mockSessionRepo) ListByProjectID(_ context.Context, _ string) ([]*domain.Session, error) {
+	return nil, nil
+}
+func (m *mockSessionRepo) SaveState(_ context.Context, _, _ string, _ int64) error      { return nil }
+func (m *mockSessionRepo) ClearOwnership(_ context.Context, _ string) error             { return nil }
+func (m *mockSessionRepo) ListActive(_ context.Context) ([]*domain.Session, error)      { return nil, nil }
+func (m *mockSessionRepo) GetMostRecentActive(_ context.Context) (*domain.Session, error) {
+	return nil, nil
 }
 
 // --- Legacy Tests ---
@@ -738,5 +847,568 @@ func TestExecutor_Coding_InvalidInput(t *testing.T) {
 				t.Fatal("should have failed")
 			}
 		})
+	}
+}
+
+// --- Task 3.15.3: Typed Params Tests ---
+
+// TestExecutor_Coding_LegacyPlainText verifies that legacy plain-text input
+// is handled with a warning but still works (backward compatibility).
+func TestExecutor_Coding_LegacyPlainText(t *testing.T) {
+	repo := &mockTaskRepo{}
+	ui := &mockUI{}
+
+	executor := NewExecutorWithConfig(ExecutorConfig{
+		TaskRepo: repo,
+		UI:       ui,
+	})
+
+	sess := &ActiveSession{
+		// No ACPRuntime - will fail before sending, but that's OK
+		// We're testing the input parsing, not the ACP send
+	}
+
+	// Plain text input (not JSON)
+	legacyInput := "Please implement the login feature with OAuth2"
+
+	task := &domain.Task{
+		ID:      idgen.MustNew(),
+		Type:    domain.TaskTypeCoding,
+		Timeout: 1000,
+		Input:   sql.NullString{String: legacyInput, Valid: true},
+	}
+
+	// Will fail because no ACP runtime, but should get past input parsing
+	err := executor.Execute(context.Background(), sess, task)
+	if err == nil {
+		t.Fatal("expected error (no ACP runtime)")
+	}
+
+	// Error should be about runtime, not about invalid input
+	if errors.Is(err, ErrInvalidTaskInput) {
+		t.Errorf("legacy text should not cause ErrInvalidTaskInput: %v", err)
+	}
+	if err.Error() != "executor: ACP runtime not available" {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestResolveContextFiles_Integration verifies the integration between
+// ParseTaskInput and resolveContextFiles.
+func TestResolveContextFiles_Integration(t *testing.T) {
+	// Create a temporary directory with some files.
+	tmpDir, err := os.MkdirTemp("", "executor_integration_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create test files.
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatalf("failed to create src dir: %v", err)
+	}
+
+	mainFile := filepath.Join(srcDir, "main.go")
+	if err := os.WriteFile(mainFile, []byte("package main"), 0644); err != nil {
+		t.Fatalf("failed to create main.go: %v", err)
+	}
+
+	project := &domain.Project{
+		ID:         "test-project",
+		WorkingDir: tmpDir,
+	}
+
+	// Parse a TaskInput with context files.
+	input := `{
+		"prompt": "Implement feature X",
+		"context_files": ["src/main.go"],
+		"tools": ["read", "write"]
+	}`
+
+	taskInput, err := domain.ParseTaskInput(input)
+	if err != nil {
+		t.Fatalf("ParseTaskInput failed: %v", err)
+	}
+
+	// Resolve context files.
+	resolved, err := resolveContextFiles(project, taskInput.ContextFiles)
+	if err != nil {
+		t.Fatalf("resolveContextFiles failed: %v", err)
+	}
+
+	if len(resolved) != 1 {
+		t.Fatalf("expected 1 resolved path, got %d", len(resolved))
+	}
+
+	expectedPath := filepath.Join(tmpDir, "src", "main.go")
+	if resolved[0] != expectedPath {
+		t.Errorf("resolved path mismatch: got %q, want %q", resolved[0], expectedPath)
+	}
+
+	// Verify tools are preserved.
+	if len(taskInput.Tools) != 2 {
+		t.Errorf("expected 2 tools, got %d", len(taskInput.Tools))
+	}
+}
+
+// --- Task 3.15.4: Failure Mapping Tests ---
+
+// TestExecutor_InvalidInput_DoesNotKillScheduler verifies that invalid input
+// fails the individual task but does not kill the scheduler (returns nil).
+func TestExecutor_InvalidInput_DoesNotKillScheduler(t *testing.T) {
+	// This test simulates three tasks: good, bad, good.
+	// All three should be dispatched; the bad one should fail with a sentinel.
+
+	// For this test, we'll focus on the failure output structure since
+	// full scheduler integration requires more setup.
+
+	tests := []struct {
+		name           string
+		sentinel       string
+		detail         string
+		expectedOutput string
+	}{
+		{
+			name:     "invalid input sentinel",
+			sentinel: FailureSentinelInvalidInput,
+			detail:   "missing prompt",
+		},
+		{
+			name:     "context file missing sentinel",
+			sentinel: FailureSentinelContextFileMissing,
+			detail:   "file not found: src/missing.go",
+		},
+		{
+			name:     "path escape sentinel",
+			sentinel: FailureSentinelPathEscape,
+			detail:   "path escapes project directory: ../../../etc/passwd",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &mockTaskRepo{}
+			ui := &mockUI{}
+
+			executor := NewExecutorWithConfig(ExecutorConfig{
+				TaskRepo: repo,
+				UI:       ui,
+			})
+
+			task := &domain.Task{
+				ID:      idgen.MustNew(),
+				Type:    domain.TaskTypeCoding,
+				Timeout: 1000,
+			}
+
+			// Directly call the failure helper.
+			executor.failTaskWithReason(context.Background(), task, tt.sentinel, tt.detail)
+
+			// Verify task status was updated to Failure.
+			if len(repo.updateStatusCalls) != 1 {
+				t.Fatalf("expected 1 status update, got %d", len(repo.updateStatusCalls))
+			}
+			if repo.updateStatusCalls[0] != domain.TaskStatusFailure {
+				t.Errorf("expected status Failure, got %d", repo.updateStatusCalls[0])
+			}
+
+			// Verify task output is set with structured error.
+			if !task.Output.Valid {
+				t.Fatal("task output should be valid")
+			}
+
+			var failureOutput TaskFailureOutput
+			if err := json.Unmarshal([]byte(task.Output.String), &failureOutput); err != nil {
+				t.Fatalf("failed to unmarshal task output: %v", err)
+			}
+
+			if failureOutput.Error != tt.sentinel {
+				t.Errorf("sentinel mismatch: got %q, want %q", failureOutput.Error, tt.sentinel)
+			}
+			if failureOutput.Detail != tt.detail {
+				t.Errorf("detail mismatch: got %q, want %q", failureOutput.Detail, tt.detail)
+			}
+		})
+	}
+}
+
+// TestTaskFailureOutput_JSONFormat verifies the JSON structure of TaskFailureOutput.
+func TestTaskFailureOutput_JSONFormat(t *testing.T) {
+	output := TaskFailureOutput{
+		Error:  FailureSentinelInvalidInput,
+		Detail: "missing required field 'prompt'",
+	}
+
+	data, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	expected := `{"error":"invalid_input","detail":"missing required field 'prompt'"}`
+	if string(data) != expected {
+		t.Errorf("JSON mismatch:\ngot:  %s\nwant: %s", string(data), expected)
+	}
+}
+
+// --- Task 3.15.3 / 3.15.4: Full Integration Tests with Mock ACP ---
+
+// createTestRuntimeWithMockWorker creates a Runtime with a mock worker injected
+// for the given session ID. Returns the runtime, the channel for capturing sent
+// messages, and a cleanup function.
+func createTestRuntimeWithMockWorker(sessionID string, taskRepo repository.TaskRepository, ui registry.UIMediator) (*Runtime, chan *acp.Message, func()) {
+	// Create registry
+	acpRegistry := acp.NewRegistry(acp.DefaultConfig())
+
+	// Create mock worker
+	worker, sentMessages, workerCleanup := acp.NewMockWorkerForTesting()
+
+	// Inject mock worker into registry
+	acpRegistry.InjectWorkerForTesting(sessionID, worker)
+
+	// Create buffer registry
+	bufferRegistry := acp.NewBufferRegistry(100)
+
+	// Create runtime
+	runtime := NewRuntime(RuntimeConfig{
+		Registry:       acpRegistry,
+		BufferRegistry: bufferRegistry,
+		Mediator:       ui,
+		TaskRepo:       taskRepo,
+		PermissionRepo: &mockPermissionRepo{},
+		SessionRepo:    &mockSessionRepo{},
+		AgentRepo:      &mockAgentRepo{},
+	})
+
+	cleanup := func() {
+		workerCleanup()
+	}
+
+	return runtime, sentMessages, cleanup
+}
+
+// TestExecutor_Coding_BuildsTypedParams verifies that the executor builds
+// correctly typed SessionPromptParams with context files and tools.
+func TestExecutor_Coding_BuildsTypedParams(t *testing.T) {
+	// Create a temporary directory with some files.
+	tmpDir, err := os.MkdirTemp("", "executor_typed_params_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create test files.
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatalf("failed to create src dir: %v", err)
+	}
+
+	file1 := filepath.Join(srcDir, "main.go")
+	if err := os.WriteFile(file1, []byte("package main"), 0644); err != nil {
+		t.Fatalf("failed to create main.go: %v", err)
+	}
+
+	file2 := filepath.Join(srcDir, "helper.go")
+	if err := os.WriteFile(file2, []byte("package main"), 0644); err != nil {
+		t.Fatalf("failed to create helper.go: %v", err)
+	}
+
+	// Setup
+	sessionID := idgen.MustNew()
+	repo := &mockTaskRepo{}
+	ui := &mockUI{}
+
+	runtime, sentMessages, cleanup := createTestRuntimeWithMockWorker(sessionID, repo, ui)
+	defer cleanup()
+
+	executor := NewExecutorWithConfig(ExecutorConfig{
+		TaskRepo: repo,
+		UI:       ui,
+	})
+
+	// Create session with runtime
+	sess := &ActiveSession{
+		Project: &domain.Project{
+			ID:         "test-project",
+			WorkingDir: tmpDir,
+		},
+		Session: &domain.Session{ID: sessionID},
+	}
+	sess.SetACPRuntime(runtime)
+	sess.SetACPSessionID("acp-session-123")
+
+	// Create task with typed input
+	input := domain.TaskInput{
+		Prompt:       "Implement feature X",
+		ContextFiles: []string{"src/main.go", "src/helper.go"},
+		Tools:        []string{"read", "write", "bash"},
+	}
+	inputJSON, _ := json.Marshal(input)
+
+	task := &domain.Task{
+		ID:      idgen.MustNew(),
+		Type:    domain.TaskTypeCoding,
+		Timeout: 1000,
+		Input:   sql.NullString{String: string(inputJSON), Valid: true},
+	}
+
+	// Execute in goroutine since it will block waiting for completion
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- executor.Execute(context.Background(), sess, task)
+	}()
+
+	// Wait for message to be sent (with timeout)
+	var sentMsg *acp.Message
+	select {
+	case sentMsg = <-sentMessages:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for message to be sent")
+	}
+
+	// Verify the sent message
+	if sentMsg.Method != acp.MethodSessionPrompt {
+		t.Errorf("expected method %s, got %s", acp.MethodSessionPrompt, sentMsg.Method)
+	}
+
+	// Parse params
+	var params acp.SessionPromptParams
+	if err := json.Unmarshal(sentMsg.Params, &params); err != nil {
+		t.Fatalf("failed to unmarshal params: %v", err)
+	}
+
+	// Verify prompt
+	if params.Prompt != "Implement feature X" {
+		t.Errorf("prompt mismatch: got %q", params.Prompt)
+	}
+
+	// Verify context files (should be absolute paths)
+	if len(params.Context) != 2 {
+		t.Fatalf("expected 2 context refs, got %d", len(params.Context))
+	}
+
+	expectedPath1 := filepath.Join(tmpDir, "src", "main.go")
+	expectedPath2 := filepath.Join(tmpDir, "src", "helper.go")
+
+	if params.Context[0].Path != expectedPath1 {
+		t.Errorf("context[0].Path mismatch: got %q, want %q", params.Context[0].Path, expectedPath1)
+	}
+	if params.Context[0].Kind != "file" {
+		t.Errorf("context[0].Kind mismatch: got %q, want %q", params.Context[0].Kind, "file")
+	}
+	if params.Context[1].Path != expectedPath2 {
+		t.Errorf("context[1].Path mismatch: got %q, want %q", params.Context[1].Path, expectedPath2)
+	}
+
+	// Verify tools
+	if len(params.Tools) != 3 {
+		t.Fatalf("expected 3 tools, got %d", len(params.Tools))
+	}
+	expectedTools := []string{"read", "write", "bash"}
+	for i, expected := range expectedTools {
+		if params.Tools[i] != expected {
+			t.Errorf("tools[%d] mismatch: got %q, want %q", i, params.Tools[i], expected)
+		}
+	}
+}
+
+// TestExecutor_Coding_PathEscapeFailsGracefully verifies that path escape
+// attempts fail the task gracefully without crashing the scheduler.
+func TestExecutor_Coding_PathEscapeFailsGracefully(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "executor_path_escape_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sessionID := idgen.MustNew()
+	repo := &mockTaskRepo{}
+	ui := &mockUI{}
+
+	runtime, _, cleanup := createTestRuntimeWithMockWorker(sessionID, repo, ui)
+	defer cleanup()
+
+	executor := NewExecutorWithConfig(ExecutorConfig{
+		TaskRepo: repo,
+		UI:       ui,
+	})
+
+	sess := &ActiveSession{
+		Project: &domain.Project{
+			ID:         "test-project",
+			WorkingDir: tmpDir,
+		},
+		Session: &domain.Session{ID: sessionID},
+	}
+	sess.SetACPRuntime(runtime)
+	sess.SetACPSessionID("acp-session-123")
+
+	// Create task with path escape attempt
+	input := domain.TaskInput{
+		Prompt:       "Implement feature X",
+		ContextFiles: []string{"../../../etc/passwd"},
+	}
+	inputJSON, _ := json.Marshal(input)
+
+	task := &domain.Task{
+		ID:      idgen.MustNew(),
+		Type:    domain.TaskTypeCoding,
+		Timeout: 1000,
+		Input:   sql.NullString{String: string(inputJSON), Valid: true},
+	}
+
+	// Execute - should return nil (not kill scheduler) but fail the task
+	err = executor.Execute(context.Background(), sess, task)
+	if err != nil {
+		t.Errorf("Execute should return nil for path escape (task failure, not scheduler failure): %v", err)
+	}
+
+	// Verify task was marked as failed
+	if len(repo.updateStatusCalls) < 2 {
+		t.Fatalf("expected at least 2 status updates (Processing, Failure), got %d", len(repo.updateStatusCalls))
+	}
+
+	// Last status should be Failure
+	lastStatus := repo.updateStatusCalls[len(repo.updateStatusCalls)-1]
+	if lastStatus != domain.TaskStatusFailure {
+		t.Errorf("expected last status Failure, got %d", lastStatus)
+	}
+
+	// Verify structured error output
+	if !task.Output.Valid {
+		t.Fatal("task output should be set")
+	}
+
+	var failureOutput TaskFailureOutput
+	if err := json.Unmarshal([]byte(task.Output.String), &failureOutput); err != nil {
+		t.Fatalf("failed to unmarshal failure output: %v", err)
+	}
+
+	if failureOutput.Error != FailureSentinelPathEscape {
+		t.Errorf("expected sentinel %q, got %q", FailureSentinelPathEscape, failureOutput.Error)
+	}
+}
+
+// TestExecutor_Coding_MissingContextFileFailsGracefully verifies that
+// missing context files fail the task gracefully.
+func TestExecutor_Coding_MissingContextFileFailsGracefully(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "executor_missing_file_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sessionID := idgen.MustNew()
+	repo := &mockTaskRepo{}
+	ui := &mockUI{}
+
+	runtime, _, cleanup := createTestRuntimeWithMockWorker(sessionID, repo, ui)
+	defer cleanup()
+
+	executor := NewExecutorWithConfig(ExecutorConfig{
+		TaskRepo: repo,
+		UI:       ui,
+	})
+
+	sess := &ActiveSession{
+		Project: &domain.Project{
+			ID:         "test-project",
+			WorkingDir: tmpDir,
+		},
+		Session: &domain.Session{ID: sessionID},
+	}
+	sess.SetACPRuntime(runtime)
+	sess.SetACPSessionID("acp-session-123")
+
+	// Create task with non-existent context file
+	input := domain.TaskInput{
+		Prompt:       "Implement feature X",
+		ContextFiles: []string{"nonexistent.go"},
+	}
+	inputJSON, _ := json.Marshal(input)
+
+	task := &domain.Task{
+		ID:      idgen.MustNew(),
+		Type:    domain.TaskTypeCoding,
+		Timeout: 1000,
+		Input:   sql.NullString{String: string(inputJSON), Valid: true},
+	}
+
+	// Execute - should return nil (not kill scheduler) but fail the task
+	err = executor.Execute(context.Background(), sess, task)
+	if err != nil {
+		t.Errorf("Execute should return nil for missing file (task failure, not scheduler failure): %v", err)
+	}
+
+	// Verify task was marked as failed
+	lastStatus := repo.updateStatusCalls[len(repo.updateStatusCalls)-1]
+	if lastStatus != domain.TaskStatusFailure {
+		t.Errorf("expected last status Failure, got %d", lastStatus)
+	}
+
+	// Verify structured error output
+	var failureOutput TaskFailureOutput
+	if err := json.Unmarshal([]byte(task.Output.String), &failureOutput); err != nil {
+		t.Fatalf("failed to unmarshal failure output: %v", err)
+	}
+
+	if failureOutput.Error != FailureSentinelContextFileMissing {
+		t.Errorf("expected sentinel %q, got %q", FailureSentinelContextFileMissing, failureOutput.Error)
+	}
+}
+
+// TestExecutor_Coding_EmptyInputFailsGracefully verifies that empty input
+// fails the task gracefully.
+func TestExecutor_Coding_EmptyInputFailsGracefully(t *testing.T) {
+	sessionID := idgen.MustNew()
+	repo := &mockTaskRepo{}
+	ui := &mockUI{}
+
+	runtime, _, cleanup := createTestRuntimeWithMockWorker(sessionID, repo, ui)
+	defer cleanup()
+
+	executor := NewExecutorWithConfig(ExecutorConfig{
+		TaskRepo: repo,
+		UI:       ui,
+	})
+
+	sess := &ActiveSession{
+		Project: &domain.Project{
+			ID:         "test-project",
+			WorkingDir: "/tmp",
+		},
+		Session: &domain.Session{ID: sessionID},
+	}
+	sess.SetACPRuntime(runtime)
+	sess.SetACPSessionID("acp-session-123")
+
+	// Create task with no input
+	task := &domain.Task{
+		ID:      idgen.MustNew(),
+		Type:    domain.TaskTypeCoding,
+		Timeout: 1000,
+		Input:   sql.NullString{Valid: false}, // No input
+	}
+
+	// Execute - should return nil (not kill scheduler) but fail the task
+	err := executor.Execute(context.Background(), sess, task)
+	if err != nil {
+		t.Errorf("Execute should return nil for empty input: %v", err)
+	}
+
+	// Verify task was marked as failed
+	lastStatus := repo.updateStatusCalls[len(repo.updateStatusCalls)-1]
+	if lastStatus != domain.TaskStatusFailure {
+		t.Errorf("expected last status Failure, got %d", lastStatus)
+	}
+
+	// Verify structured error output
+	var failureOutput TaskFailureOutput
+	if err := json.Unmarshal([]byte(task.Output.String), &failureOutput); err != nil {
+		t.Fatalf("failed to unmarshal failure output: %v", err)
+	}
+
+	if failureOutput.Error != FailureSentinelInvalidInput {
+		t.Errorf("expected sentinel %q, got %q", FailureSentinelInvalidInput, failureOutput.Error)
 	}
 }

@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +44,12 @@ var ErrCommandNotWhitelisted = errors.New("executor: command not whitelisted")
 
 // ErrInvalidTaskInput is returned when task.Input JSON is invalid or missing required fields.
 var ErrInvalidTaskInput = errors.New("executor: invalid task input")
+
+// ErrContextFileMissing is returned when a context file does not exist.
+var ErrContextFileMissing = errors.New("executor: context file missing")
+
+// ErrPathEscape is returned when a context file path escapes the project directory.
+var ErrPathEscape = errors.New("executor: path escape detected")
 
 // ConfirmationOption constants for confirmation tasks.
 const (
@@ -85,6 +94,77 @@ type VerificationOutputSchema struct {
 // ConfirmationInputSchema represents the JSON schema for Confirmation task input.
 type ConfirmationInputSchema struct {
 	Prompt string `json:"prompt"`
+}
+
+// TaskFailureOutput represents a structured failure output for tasks.
+// It provides a machine-readable error sentinel and human-readable detail.
+type TaskFailureOutput struct {
+	Error  string `json:"error"`  // Sentinel: invalid_input, context_file_missing, path_escape
+	Detail string `json:"detail"` // Human-readable error message
+}
+
+// Failure sentinels for task output.
+const (
+	FailureSentinelInvalidInput      = "invalid_input"
+	FailureSentinelContextFileMissing = "context_file_missing"
+	FailureSentinelPathEscape        = "path_escape"
+)
+
+// resolveContextFiles resolves relative file paths under the project working
+// directory and rejects path escapes or missing files.
+//
+// For each file path:
+//   - filepath.Clean is applied to normalize the path
+//   - Paths starting with ".." or absolute paths are rejected with ErrPathEscape
+//   - The path is prefixed with project.WorkingDir
+//   - os.Stat confirms the file exists; missing files return ErrContextFileMissing
+//
+// Returns the list of absolute paths or an error with details about which file
+// failed validation.
+func resolveContextFiles(project *domain.Project, files []string) ([]string, error) {
+	if project == nil || project.WorkingDir == "" {
+		return nil, fmt.Errorf("%w: project working directory not set", ErrInvalidTaskInput)
+	}
+
+	if len(files) == 0 {
+		return nil, nil
+	}
+
+	resolved := make([]string, 0, len(files))
+
+	for _, file := range files {
+		// Normalize the path.
+		cleaned := filepath.Clean(file)
+
+		// Reject absolute paths.
+		if filepath.IsAbs(cleaned) {
+			return nil, fmt.Errorf("%w: absolute path not allowed: %s", ErrPathEscape, file)
+		}
+
+		// Reject paths that escape the project directory.
+		if strings.HasPrefix(cleaned, "..") {
+			return nil, fmt.Errorf("%w: path escapes project directory: %s", ErrPathEscape, file)
+		}
+
+		// Build the absolute path.
+		absPath := filepath.Join(project.WorkingDir, cleaned)
+
+		// Additional safety check: ensure the resolved path is within WorkingDir.
+		// This handles edge cases like "foo/../../../etc/passwd".
+		relPath, err := filepath.Rel(project.WorkingDir, absPath)
+		if err != nil || strings.HasPrefix(relPath, "..") {
+			return nil, fmt.Errorf("%w: path escapes project directory: %s", ErrPathEscape, file)
+		}
+
+		// Verify the file exists.
+		if _, err := os.Stat(absPath); os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: %s", ErrContextFileMissing, file)
+		}
+
+		resolved = append(resolved, absPath)
+	}
+
+	return resolved, nil
 }
 
 // Executor wraps a CodingAgent with crash-fallback logic (Story 1.9) and
@@ -231,21 +311,69 @@ func (e *Executor) executeCoding(ctx context.Context, sess *ActiveSession, task 
 	worker.SetCurrentTask(task.ID)
 	defer worker.SetCurrentTask("")
 
-	// 4. Parse task.Input JSON into prompt.
-	var input CodingInputSchema
+	// 4. Parse task.Input using the TaskInput schema (EPIC-02 §2.13).
+	var taskInput *domain.TaskInput
+	var parseErr error
+
 	if task.Input.Valid {
-		if err := json.Unmarshal([]byte(task.Input.String), &input); err != nil {
-			return fmt.Errorf("%w: invalid JSON: %v", ErrInvalidTaskInput, err)
+		taskInput, parseErr = domain.ParseTaskInput(task.Input.String)
+		if parseErr != nil {
+			if errors.Is(parseErr, domain.ErrEmptyInput) {
+				e.failTaskWithReason(ctx, task, FailureSentinelInvalidInput, "empty input")
+				return nil // Per-task failure, don't kill the scheduler
+			}
+			if errors.Is(parseErr, domain.ErrLegacyText) {
+				// Legacy plain-text input - log warning but continue.
+				slog.Warn("executor: legacy plain-text task.input",
+					"task_id", task.ID,
+				)
+			}
 		}
-	}
-	if input.Prompt == "" {
-		return fmt.Errorf("%w: missing prompt", ErrInvalidTaskInput)
+	} else {
+		e.failTaskWithReason(ctx, task, FailureSentinelInvalidInput, "no input provided")
+		return nil // Per-task failure, don't kill the scheduler
 	}
 
-	// 5. Build and send session/prompt request.
+	// Validate required fields.
+	if taskInput == nil || taskInput.Prompt == "" {
+		e.failTaskWithReason(ctx, task, FailureSentinelInvalidInput, "missing prompt")
+		return nil // Per-task failure, don't kill the scheduler
+	}
+
+	// 5. Resolve context files relative to project working directory.
+	var contextRefs []acp.PromptContextRef
+	if len(taskInput.ContextFiles) > 0 {
+		resolvedPaths, err := resolveContextFiles(sess.Project, taskInput.ContextFiles)
+		if err != nil {
+			// Map error to appropriate sentinel.
+			var sentinel string
+			switch {
+			case errors.Is(err, ErrPathEscape):
+				sentinel = FailureSentinelPathEscape
+			case errors.Is(err, ErrContextFileMissing):
+				sentinel = FailureSentinelContextFileMissing
+			default:
+				sentinel = FailureSentinelInvalidInput
+			}
+			e.failTaskWithReason(ctx, task, sentinel, err.Error())
+			return nil // Per-task failure, don't kill the scheduler
+		}
+
+		contextRefs = make([]acp.PromptContextRef, len(resolvedPaths))
+		for i, path := range resolvedPaths {
+			contextRefs[i] = acp.PromptContextRef{
+				Path: path,
+				Kind: "file",
+			}
+		}
+	}
+
+	// 6. Build and send session/prompt request with context and tools.
 	params := acp.SessionPromptParams{
 		SessionID: sess.GetACPSessionID(),
-		Prompt:    input.Prompt,
+		Prompt:    taskInput.Prompt,
+		Context:   contextRefs,
+		Tools:     taskInput.Tools,
 	}
 
 	req, err := acp.NewRequest(acp.MethodSessionPrompt, params)
@@ -257,7 +385,7 @@ func (e *Executor) executeCoding(ctx context.Context, sess *ActiveSession, task 
 		return fmt.Errorf("executor: send prompt: %w", err)
 	}
 
-	// 6. Block until StatusMapper signals completion or timeout.
+	// 7. Block until StatusMapper signals completion or timeout.
 	timeout := time.Duration(task.Timeout) * time.Millisecond
 	if timeout == 0 {
 		timeout = time.Duration(domain.DefaultTaskTimeout) * time.Millisecond
@@ -596,6 +724,29 @@ func (e *Executor) setTaskOutputRaw(ctx context.Context, task *domain.Task, outp
 	task.Output = domain.NewNullString(output)
 	// TODO: Implement taskRepo.UpdateOutput(ctx, task.ID, output)
 	slog.Debug("executor: task output set", "task_id", task.ID, "output_len", len(output))
+}
+
+// failTaskWithReason marks a task as failed with a structured error output.
+// This is used for input validation failures that should not crash the scheduler.
+// The task output is set to {"error": "<sentinel>", "detail": "<message>"}.
+func (e *Executor) failTaskWithReason(ctx context.Context, task *domain.Task, sentinel, detail string) {
+	output := TaskFailureOutput{
+		Error:  sentinel,
+		Detail: detail,
+	}
+	e.setTaskOutput(ctx, task, output)
+	if err := e.taskRepo.UpdateTaskStatus(ctx, task.ID, domain.TaskStatusFailure); err != nil {
+		slog.Error("executor: failed to update task status to failure",
+			"task_id", task.ID,
+			"sentinel", sentinel,
+			"error", err,
+		)
+	}
+	slog.Info("executor: task failed with reason",
+		"task_id", task.ID,
+		"sentinel", sentinel,
+		"detail", detail,
+	)
 }
 
 // handleCrash performs the state reassignment and UI notification after a

@@ -1,0 +1,23 @@
+{
+  "prompt": "Implement the user authentication feature with OAuth2 support. The implementation should include:\n1. Login endpoint (/api/auth/login)\n2. Logout endpoint (/api/auth/logout)\n3. OAuth2 callback handler\n4. Session management using JWT tokens\n\nFollow the existing code patterns in the codebase and ensure proper error handling.",
+  "context_files": [
+    "src/auth/handler.go",
+    "src/models/user.go",
+    "src/middleware/auth.go"
+  ],
+  "tools": [
+    "read",
+    "write",
+    "bash",
+    "glob",
+    "grep"
+  ],
+  "command": "go test ./src/auth/...",
+  "cwd": "/project/root",
+  "metadata": {
+    "story_id": "2.13",
+    "epic_id": "02",
+    "priority": "high",
+    "generator_version": "1.0"
+  }
+}

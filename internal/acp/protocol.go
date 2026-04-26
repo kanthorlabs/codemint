@@ -186,8 +186,17 @@ type SessionNewResult struct {
 
 // SessionPromptParams represents the parameters for session/prompt.
 type SessionPromptParams struct {
-	SessionID string `json:"sessionId"`
-	Prompt    string `json:"prompt"`
+	SessionID string             `json:"sessionId"`
+	Prompt    string             `json:"prompt"`
+	Context   []PromptContextRef `json:"context,omitempty"`
+	Tools     []string           `json:"tools,omitempty"`
+}
+
+// PromptContextRef represents a context reference in a session/prompt request.
+// It allows the agent to access specific files or resources as context.
+type PromptContextRef struct {
+	Path string `json:"path"` // Absolute path to the file
+	Kind string `json:"kind"` // Type of context: "file" for now
 }
 
 // SessionPromptResult represents the result of session/prompt.

@@ -225,3 +225,12 @@ func (r *Registry) watchWorker(sessionID string, worker *Worker) {
 		slog.Info("acp: worker exited", "sessionID", sessionID, "pid", worker.Pid())
 	}
 }
+
+// InjectWorkerForTesting allows tests to inject a pre-created worker into the registry.
+// This is only intended for testing purposes and should not be used in production code.
+// The worker must have a valid Done() channel for cleanup to work properly.
+func (r *Registry) InjectWorkerForTesting(sessionID string, worker *Worker) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.workers[sessionID] = worker
+}

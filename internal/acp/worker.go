@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -623,4 +624,48 @@ func (w *Worker) waitProcess() {
 		w.exitErr = err
 		close(w.done)
 	})
+}
+
+// NewMockWorkerForTesting creates a Worker instance that can be used for testing.
+// It creates a worker with no underlying process but with valid channels and a
+// noop writer for stdin. The worker reports as Alive() and can receive Send() calls.
+//
+// The returned sentMessages channel receives all messages sent to this worker.
+// Call the returned cleanup function when done to properly close channels.
+func NewMockWorkerForTesting() (worker *Worker, sentMessages chan *Message, cleanup func()) {
+	sent := make(chan *Message, 100)
+	done := make(chan struct{})
+
+	// Create a pipe for stdin - we'll capture writes
+	stdinReader, stdinWriter, _ := os.Pipe()
+
+	worker = &Worker{
+		cfg:     WorkerConfig{},
+		stdin:   stdinWriter,
+		stdout:  nil, // Not used in testing
+		stderr:  nil, // Not used in testing
+		out:     make(chan Message, 10),
+		done:    done,
+		pending: make(map[int64]chan Message),
+	}
+
+	// Start a goroutine to capture sent messages
+	go func() {
+		scanner := bufio.NewScanner(stdinReader)
+		for scanner.Scan() {
+			var msg Message
+			if err := json.Unmarshal(scanner.Bytes(), &msg); err == nil {
+				sent <- &msg
+			}
+		}
+	}()
+
+	cleanup = func() {
+		stdinWriter.Close()
+		stdinReader.Close()
+		close(done)
+		close(sent)
+	}
+
+	return worker, sent, cleanup
 }
