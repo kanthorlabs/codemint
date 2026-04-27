@@ -1,7 +1,7 @@
 # CodeMint PRD & Engineering Spec: EPIC-04 (Multi-Interface Support)
 
 ## 1. Overview
-EPIC-04 defines the presentation layer of CodeMint. It establishes a unified Go `UIAdapter` interface and a `UIMediator` that pipes orchestration data to a high-bandwidth local Terminal UI (Bubble Tea) and a low-bandwidth, minimalist Chat UI (Telegram/Slack) simultaneously.
+EPIC-04 defines the presentation layer of CodeMint. It establishes a unified Go `UIAdapter` interface and a `UIMediator` that pipes orchestration data to a high-bandwidth local Terminal UI (Bubble Tea - https://github.com/charmbracelet/bubbletea) and a low-bandwidth, minimalist Chat UI (Telegram/Slack) simultaneously.
 
 ---
 
