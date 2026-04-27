@@ -18,6 +18,7 @@ var builtinProviders = map[string]*Provider{
 		},
 		SystemPromptStrategy: PromptStrategyStdin,
 		VersionArgs:          []string{"--version"},
+		ModelFlag:            "--model",
 	},
 	"codex": {
 		Name:        "codex",
@@ -32,6 +33,7 @@ var builtinProviders = map[string]*Provider{
 		},
 		SystemPromptStrategy: PromptStrategyFlag,
 		VersionArgs:          []string{"--version"},
+		ModelFlag:            "--model",
 	},
 	"claude-code": {
 		Name:        "claude-code",
@@ -46,6 +48,7 @@ var builtinProviders = map[string]*Provider{
 		},
 		SystemPromptStrategy: PromptStrategyStdin,
 		VersionArgs:          []string{"--version"},
+		ModelFlag:            "--model",
 	},
 }
 

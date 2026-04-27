@@ -62,6 +62,9 @@ type Provider struct {
 	SystemPromptStrategy PromptStrategy
 	// VersionArgs are arguments to get version info (for /providers test command).
 	VersionArgs []string
+	// ModelFlag is the CLI flag for model selection (e.g., "--model").
+	// Empty string means the provider doesn't accept a CLI model selector.
+	ModelFlag string
 }
 
 // Clone creates a deep copy of the Provider.
@@ -78,6 +81,7 @@ func (p *Provider) Clone() *Provider {
 		Capabilities:         p.Capabilities,
 		SystemPromptStrategy: p.SystemPromptStrategy,
 		VersionArgs:          make([]string, len(p.VersionArgs)),
+		ModelFlag:            p.ModelFlag,
 	}
 	copy(clone.Args, p.Args)
 	copy(clone.VersionArgs, p.VersionArgs)
@@ -114,5 +118,8 @@ func (p *Provider) Merge(override *Provider) {
 	if len(override.VersionArgs) > 0 {
 		p.VersionArgs = make([]string, len(override.VersionArgs))
 		copy(p.VersionArgs, override.VersionArgs)
+	}
+	if override.ModelFlag != "" {
+		p.ModelFlag = override.ModelFlag
 	}
 }

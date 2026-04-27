@@ -288,3 +288,81 @@ func containsString(s, substr string) bool {
 	}
 	return false
 }
+
+func TestProviderRegistry_ConfigOverridesModelFlag(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{
+			{
+				Name:      "opencode",
+				ModelFlag: "-m", // Override from default "--model"
+			},
+		},
+	}
+
+	reg, err := NewProviderRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewProviderRegistry failed: %v", err)
+	}
+
+	provider, err := reg.Resolve("opencode")
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+
+	if provider.ModelFlag != "-m" {
+		t.Errorf("ModelFlag = %q; want %q", provider.ModelFlag, "-m")
+	}
+}
+
+func TestProviderRegistry_CustomProviderHasDefaultModelFlag(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{
+			{
+				Name:    "custom-ai",
+				Command: "/usr/bin/custom-ai",
+				// ModelFlag not specified
+			},
+		},
+	}
+
+	reg, err := NewProviderRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewProviderRegistry failed: %v", err)
+	}
+
+	provider, err := reg.Resolve("custom-ai")
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+
+	// Custom providers should default to "--model"
+	if provider.ModelFlag != "--model" {
+		t.Errorf("ModelFlag = %q; want %q (default)", provider.ModelFlag, "--model")
+	}
+}
+
+func TestProviderRegistry_CustomProviderExplicitModelFlag(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{
+			{
+				Name:      "custom-ai",
+				Command:   "/usr/bin/custom-ai",
+				ModelFlag: "--custom-model",
+			},
+		},
+	}
+
+	reg, err := NewProviderRegistry(cfg)
+	if err != nil {
+		t.Fatalf("NewProviderRegistry failed: %v", err)
+	}
+
+	provider, err := reg.Resolve("custom-ai")
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+
+	if provider.ModelFlag != "--custom-model" {
+		t.Errorf("ModelFlag = %q; want %q", provider.ModelFlag, "--custom-model")
+	}
+}

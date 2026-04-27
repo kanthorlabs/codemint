@@ -17,7 +17,27 @@ workflows:
     description: "Status checks and routine operations"
     triggers: ["status", "check", "verify", "test", "review", "analyze"]
 
-# agents:
-#   - name: "System Assistant"
-#     type: 2
-#     assistant: "system"
+# Available ACP providers. Names matching the built-in catalog (opencode, codex,
+# claude-code) inherit defaults — only override fields you need.
+# providers:
+#   - name: opencode
+#     # command: opencode    # default; override only if not on PATH
+#     # args: ["acp"]
+#   - name: codex
+#   - name: claude-code
+#     command: claude
+
+# Bind logical assistants to a provider and (optionally) a model.
+# Omit the entire block to use the OpenCode default with the Provider's
+# default model.
+# assistants:
+#   system:
+#     provider: opencode
+#     model: "github-copilot/claude-sonnet-4.6"
+#   brainstormer:        # EPIC-02
+#     provider: opencode
+#     model: "github-copilot/claude-sonnet-4.6"
+#   clarifier:           # EPIC-02 §2.12
+#     provider: opencode
+#   archivist:           # EPIC-05
+#     provider: opencode

@@ -162,29 +162,6 @@ func TestValidationError_Error(t *testing.T) {
 	}
 }
 
-func TestValidate_AgentConfig(t *testing.T) {
-	cfg := &Config{
-		Agents: []AgentConfig{
-			{Name: "", Type: 0}, // Missing name
-			{Name: "Valid Agent", Type: 99}, // Invalid type
-		},
-	}
-
-	err := Validate(cfg)
-	if err == nil {
-		t.Fatal("expected error for invalid agent config, got nil")
-	}
-
-	vErr, ok := err.(*ValidationError)
-	if !ok {
-		t.Fatalf("expected *ValidationError, got %T", err)
-	}
-
-	if len(vErr.Violations) != 2 {
-		t.Errorf("expected 2 violations, got %d: %v", len(vErr.Violations), vErr.Violations)
-	}
-}
-
 func TestValidate_UnknownProvider(t *testing.T) {
 	cfg := &Config{
 		Assistants: AssistantsConfig{

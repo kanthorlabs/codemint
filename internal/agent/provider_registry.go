@@ -81,11 +81,16 @@ func configToProviderOverride(pc *config.ProviderConfig) *Provider {
 		Args:        pc.Args,
 		Env:         pc.Env,
 		VersionArgs: nil, // Config doesn't override version args
+		ModelFlag:   pc.ModelFlag,
 	}
 }
 
 // configToProvider creates a full Provider from config (for custom providers).
 func configToProvider(pc *config.ProviderConfig) *Provider {
+	modelFlag := pc.ModelFlag
+	if modelFlag == "" {
+		modelFlag = "--model" // Default for custom providers
+	}
 	return &Provider{
 		Name:        pc.Name,
 		DisplayName: pc.Name, // Custom providers use name as display name
@@ -100,6 +105,7 @@ func configToProvider(pc *config.ProviderConfig) *Provider {
 		},
 		SystemPromptStrategy: PromptStrategyStdin, // Default for custom providers
 		VersionArgs:          []string{"--version"},
+		ModelFlag:            modelFlag,
 	}
 }
 

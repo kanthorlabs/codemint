@@ -37,6 +37,9 @@ func TestLookupBuiltinProvider_Opencode(t *testing.T) {
 	if provider.SystemPromptStrategy != PromptStrategyStdin {
 		t.Errorf("SystemPromptStrategy = %v; want %v", provider.SystemPromptStrategy, PromptStrategyStdin)
 	}
+	if provider.ModelFlag != "--model" {
+		t.Errorf("ModelFlag = %q; want %q", provider.ModelFlag, "--model")
+	}
 }
 
 func TestLookupBuiltinProvider_Codex(t *testing.T) {
@@ -261,5 +264,88 @@ func TestPromptStrategyString(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("%v.String() = %q; want %q", tt.strategy, got, tt.want)
 		}
+	}
+}
+
+func TestProvider_ModelFlag_DefaultsForCatalog(t *testing.T) {
+	// Table test for all builtin providers.
+	tests := []struct {
+		name      string
+		wantFlag  string
+	}{
+		{"opencode", "--model"},
+		{"codex", "--model"},
+		{"claude-code", "--model"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, ok := LookupBuiltinProvider(tt.name)
+			if !ok {
+				t.Fatalf("expected to find %q provider", tt.name)
+			}
+			if provider.ModelFlag != tt.wantFlag {
+				t.Errorf("ModelFlag = %q; want %q", provider.ModelFlag, tt.wantFlag)
+			}
+		})
+	}
+}
+
+func TestProviderClone_CopiesModelFlag(t *testing.T) {
+	original := &Provider{
+		Name:      "test",
+		ModelFlag: "--model",
+	}
+
+	clone := original.Clone()
+
+	if clone.ModelFlag != original.ModelFlag {
+		t.Errorf("ModelFlag = %q; want %q", clone.ModelFlag, original.ModelFlag)
+	}
+
+	// Verify independence (strings are immutable, but ensure assignment works)
+	clone.ModelFlag = "-m"
+	if original.ModelFlag == "-m" {
+		t.Error("modifying clone should not affect original")
+	}
+}
+
+func TestProviderMerge_MergesModelFlag(t *testing.T) {
+	base := &Provider{
+		Name:      "base",
+		ModelFlag: "--model",
+	}
+
+	override := &Provider{
+		ModelFlag: "-m",
+	}
+
+	base.Merge(override)
+
+	if base.ModelFlag != "-m" {
+		t.Errorf("ModelFlag = %q; want %q", base.ModelFlag, "-m")
+	}
+}
+
+func TestProviderMerge_EmptyModelFlag_NoOverride(t *testing.T) {
+	base := &Provider{
+		Name:      "base",
+		ModelFlag: "--model",
+	}
+
+	override := &Provider{
+		Command: "new-cmd", // Non-empty to verify partial merge
+		// ModelFlag intentionally empty
+	}
+
+	base.Merge(override)
+
+	// ModelFlag should remain unchanged
+	if base.ModelFlag != "--model" {
+		t.Errorf("ModelFlag = %q; want %q (should not be overridden by empty)", base.ModelFlag, "--model")
+	}
+	// But Command should be updated
+	if base.Command != "new-cmd" {
+		t.Errorf("Command = %q; want %q", base.Command, "new-cmd")
 	}
 }

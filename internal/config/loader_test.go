@@ -1,9 +1,12 @@
 package config
 
 import (
+	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -93,4 +96,170 @@ func writeTestFile(t *testing.T, content string) string {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 	return path
+}
+
+func TestLoad_LegacyAgentsKey_LogsDeprecation(t *testing.T) {
+	content := `
+workflows: []
+agents:
+  - name: foo
+`
+	tmpFile := writeTestFile(t, content)
+
+	// Set up a test log handler to capture the warning.
+	handler := &testLogHandler{}
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(oldLogger)
+
+	cfg, err := Load(tmpFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("expected config, got nil")
+	}
+
+	// Check that the deprecation warning was logged.
+	if !handler.hasWarning("agents:", "deprecated") {
+		t.Error("expected deprecation warning for 'agents:' key")
+	}
+}
+
+func TestLoad_NoLegacyAgentsKey_NoWarning(t *testing.T) {
+	content := `
+workflows: []
+assistants:
+  system:
+    provider: opencode
+`
+	tmpFile := writeTestFile(t, content)
+
+	handler := &testLogHandler{}
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(oldLogger)
+
+	_, err := Load(tmpFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if handler.hasWarning("agents:", "deprecated") {
+		t.Error("should not log deprecation warning when agents: key is absent")
+	}
+}
+
+// testLogHandler is a slog.Handler that records log records for testing.
+type testLogHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *testLogHandler) Enabled(_ context.Context, _ slog.Level) bool {
+	return true
+}
+
+func (h *testLogHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+
+func (h *testLogHandler) WithAttrs(_ []slog.Attr) slog.Handler {
+	return h
+}
+
+func (h *testLogHandler) WithGroup(_ string) slog.Handler {
+	return h
+}
+
+func (h *testLogHandler) hasWarning(keywords ...string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.records {
+		if r.Level == slog.LevelWarn {
+			msg := r.Message
+			allFound := true
+			for _, kw := range keywords {
+				if !strings.Contains(msg, kw) {
+					allFound = false
+					break
+				}
+			}
+			if allFound {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestLoad_UnknownAssistantRole_Fails(t *testing.T) {
+	content := `
+workflows: []
+assistants:
+  systen:  # typo - should be "system"
+    provider: opencode
+`
+	tmpFile := writeTestFile(t, content)
+
+	_, err := Load(tmpFile)
+	if err == nil {
+		t.Fatal("expected error for unknown assistant role, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "unknown assistant role") {
+		t.Errorf("error should mention 'unknown assistant role': %v", err)
+	}
+	if !strings.Contains(err.Error(), "systen") {
+		t.Errorf("error should mention the typo 'systen': %v", err)
+	}
+	if !strings.Contains(err.Error(), "known:") {
+		t.Errorf("error should list known roles: %v", err)
+	}
+}
+
+func TestLoad_KnownAssistantRoles_Pass(t *testing.T) {
+	content := `
+workflows: []
+assistants:
+  system:
+    provider: opencode
+  brainstormer:
+    provider: codex
+  clarifier:
+    provider: opencode
+  archivist:
+    provider: opencode
+`
+	tmpFile := writeTestFile(t, content)
+
+	cfg, err := Load(tmpFile)
+	if err != nil {
+		t.Fatalf("Load returned error for valid config: %v", err)
+	}
+
+	if cfg.Assistants.System.Provider != "opencode" {
+		t.Errorf("System.Provider = %q; want %q", cfg.Assistants.System.Provider, "opencode")
+	}
+	if cfg.Assistants.Brainstormer.Provider != "codex" {
+		t.Errorf("Brainstormer.Provider = %q; want %q", cfg.Assistants.Brainstormer.Provider, "codex")
+	}
+}
+
+// TestExampleConfig_Loads verifies that the example config file loads without errors.
+func TestExampleConfig_Loads(t *testing.T) {
+	cfg, err := Load("../../configs/config.yaml.example")
+	if err != nil {
+		t.Fatalf("Load returned error for example config: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("expected config, got nil")
+	}
+	// Verify some expected content.
+	if len(cfg.Workflows) != 3 {
+		t.Errorf("expected 3 workflows in example config, got %d", len(cfg.Workflows))
+	}
 }

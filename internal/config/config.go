@@ -5,10 +5,9 @@ package config
 
 // Config is the root configuration structure for CodeMint.
 type Config struct {
-	Workflows  []WorkflowConfig  `yaml:"workflows" validate:"dive"`
-	Agents     []AgentConfig     `yaml:"agents,omitempty" validate:"dive"`
-	Providers  []ProviderConfig  `yaml:"providers,omitempty" validate:"dive"`
-	Assistants AssistantsConfig  `yaml:"assistants,omitempty"`
+	Workflows  []WorkflowConfig `yaml:"workflows" validate:"dive"`
+	Providers  []ProviderConfig `yaml:"providers,omitempty" validate:"dive"`
+	Assistants AssistantsConfig `yaml:"assistants,omitempty"`
 }
 
 // WorkflowConfig defines a workflow entry in the configuration file.
@@ -17,15 +16,6 @@ type WorkflowConfig struct {
 	Name        string   `yaml:"name" validate:"required"`
 	Description string   `yaml:"description"`
 	Triggers    []string `yaml:"triggers,omitempty"`
-}
-
-// AgentConfig defines an agent entry in the configuration file.
-// Reserved for future use (EPIC-02+).
-type AgentConfig struct {
-	ID        string `yaml:"id,omitempty"`
-	Name      string `yaml:"name" validate:"required"`
-	Type      int    `yaml:"type" validate:"min=0,max=2"`
-	Assistant string `yaml:"assistant,omitempty"`
 }
 
 // ProviderConfig defines a provider entry in the configuration file.
@@ -42,6 +32,9 @@ type ProviderConfig struct {
 	Env map[string]string `yaml:"env,omitempty"`
 	// Disabled excludes this provider from resolution.
 	Disabled bool `yaml:"disabled,omitempty"`
+	// ModelFlag overrides the CLI flag for model selection (e.g., "--model", "-m").
+	// Empty string disables model injection for this provider.
+	ModelFlag string `yaml:"model_flag,omitempty"`
 }
 
 // AssistantsConfig holds configuration for different assistant bindings.
