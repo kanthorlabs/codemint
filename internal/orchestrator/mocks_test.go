@@ -179,6 +179,10 @@ func (m *interceptorMockTaskRepo) ListBySession(ctx context.Context, sessionID s
 	return nil, nil
 }
 
+func (m *interceptorMockTaskRepo) ListPending(ctx context.Context, sessionID string) ([]*domain.Task, error) {
+	return nil, nil
+}
+
 func (m *interceptorMockTaskRepo) MostRecentActive(ctx context.Context, sessionID string) (*domain.Task, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

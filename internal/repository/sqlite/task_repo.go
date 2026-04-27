@@ -62,13 +62,15 @@ func (r *taskRepo) Create(ctx context.Context, t *domain.Task) error {
 	const query = `
 		INSERT INTO task (
 			id, project_id, session_id, workflow_id, assignee_id,
-			seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id,
+			depends_on, condition
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := r.db.ExecContext(ctx, query,
 		t.ID, t.ProjectID, t.SessionID, t.WorkflowID, t.AssigneeID,
 		t.SeqEpic, t.SeqStory, t.SeqTask, int(t.Type), int(t.Status),
 		t.Timeout, t.Input, t.Output, t.ClientID,
+		t.DependsOn, t.Condition,
 	)
 	if err != nil {
 		return fmt.Errorf("sqlite: create task %q: %w", t.ID, err)
@@ -81,7 +83,8 @@ func (r *taskRepo) Create(ctx context.Context, t *domain.Task) error {
 func (r *taskRepo) Next(ctx context.Context, sessionID string) (*domain.Task, error) {
 	const query = `
 		SELECT id, project_id, session_id, workflow_id, assignee_id,
-		       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id
+		       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id,
+		       depends_on, condition
 		FROM task
 		WHERE session_id = ?
 		  AND status IN (0, 2)
@@ -166,7 +169,8 @@ func (r *taskRepo) UpdateStatus(ctx context.Context, taskID string, status domai
 func (r *taskRepo) FindByID(ctx context.Context, taskID string) (*domain.Task, error) {
 	const query = `
 		SELECT id, project_id, session_id, workflow_id, assignee_id,
-		       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id
+		       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id,
+		       depends_on, condition
 		FROM task
 		WHERE id = ?`
 
@@ -219,7 +223,8 @@ func (r *taskRepo) UpdateTaskStatus(ctx context.Context, taskID string, status d
 func (r *taskRepo) FindInterrupted(ctx context.Context, sessionID string) ([]*domain.Task, error) {
 	const query = `
 		SELECT id, project_id, session_id, workflow_id, assignee_id,
-		       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id
+		       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id,
+		       depends_on, condition
 		FROM task
 		WHERE session_id = ?
 		  AND status = 1
@@ -262,7 +267,8 @@ func (r *taskRepo) ListCoordinationAfter(ctx context.Context, sessionID string, 
 		// Return all Coordination tasks.
 		const query = `
 			SELECT id, project_id, session_id, workflow_id, assignee_id,
-			       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id
+			       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id,
+			       depends_on, condition
 			FROM task
 			WHERE session_id = ?
 			  AND type = ?
@@ -272,7 +278,8 @@ func (r *taskRepo) ListCoordinationAfter(ctx context.Context, sessionID string, 
 		// Return Coordination tasks after the given ID.
 		const query = `
 			SELECT id, project_id, session_id, workflow_id, assignee_id,
-			       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id
+			       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id,
+			       depends_on, condition
 			FROM task
 			WHERE session_id = ?
 			  AND type = ?
@@ -292,7 +299,8 @@ func (r *taskRepo) ListCoordinationAfter(ctx context.Context, sessionID string, 
 func (r *taskRepo) ListBySession(ctx context.Context, sessionID string) ([]*domain.Task, error) {
 	const query = `
 		SELECT id, project_id, session_id, workflow_id, assignee_id,
-		       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id
+		       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id,
+		       depends_on, condition
 		FROM task
 		WHERE session_id = ?
 		ORDER BY seq_epic ASC, seq_story ASC, seq_task ASC`
@@ -304,6 +312,26 @@ func (r *taskRepo) ListBySession(ctx context.Context, sessionID string) ([]*doma
 	return tasks, nil
 }
 
+// ListPending returns all pending tasks (status Pending=0 or Awaiting=2) in
+// the given session, ordered by (seq_epic, seq_story, seq_task) ASC.
+// Used by the Scheduler to evaluate eligibility based on depends_on/condition.
+func (r *taskRepo) ListPending(ctx context.Context, sessionID string) ([]*domain.Task, error) {
+	const query = `
+		SELECT id, project_id, session_id, workflow_id, assignee_id,
+		       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id,
+		       depends_on, condition
+		FROM task
+		WHERE session_id = ?
+		  AND status IN (0, 2)
+		ORDER BY seq_epic ASC, seq_story ASC, seq_task ASC`
+
+	var tasks []*domain.Task
+	if err := r.db.SelectContext(ctx, &tasks, query, sessionID); err != nil {
+		return nil, fmt.Errorf("sqlite: list pending tasks for session %q: %w", sessionID, err)
+	}
+	return tasks, nil
+}
+
 // MostRecentActive returns the most recently active task in the session
 // that is in Processing (1) or Awaiting (2) status. The "most recent" is
 // determined by the highest ID (since IDs are ULIDs, lexicographically
@@ -311,7 +339,8 @@ func (r *taskRepo) ListBySession(ctx context.Context, sessionID string) ([]*doma
 func (r *taskRepo) MostRecentActive(ctx context.Context, sessionID string) (*domain.Task, error) {
 	const query = `
 		SELECT id, project_id, session_id, workflow_id, assignee_id,
-		       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id
+		       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id,
+		       depends_on, condition
 		FROM task
 		WHERE session_id = ?
 		  AND status IN (?, ?)

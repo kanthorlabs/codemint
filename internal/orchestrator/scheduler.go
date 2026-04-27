@@ -137,13 +137,25 @@ func (s *Scheduler) ProcessNextTask(ctx context.Context) (*domain.Task, error) {
 		return nil, nil
 	}
 
-	// Fetch the next pending task ordered by (seq_epic, seq_story, seq_task).
-	task, err := s.taskRepo.Next(ctx, sessionID)
+	// Fetch all pending tasks to evaluate eligibility.
+	pendingTasks, err := s.taskRepo.ListPending(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
+	if len(pendingTasks) == 0 {
+		return nil, nil // No pending tasks
+	}
+
+	// Find the first eligible task.
+	var task *domain.Task
+	for _, t := range pendingTasks {
+		if s.isTaskEligible(ctx, t) {
+			task = t
+			break
+		}
+	}
 	if task == nil {
-		return nil, nil // No pending task
+		return nil, nil // No eligible task
 	}
 
 	// Check for story boundary and reset context if needed.
@@ -168,6 +180,52 @@ func (s *Scheduler) ProcessNextTask(ctx context.Context) (*domain.Task, error) {
 	}
 
 	return task, nil
+}
+
+// isTaskEligible checks if a task is eligible for execution based on its
+// depends_on and condition fields (Story 2.0.2).
+//
+// Eligibility rules:
+//   - Task with no depends_on is always eligible (seq order alone).
+//   - Task with depends_on waits for predecessor to reach terminal state.
+//   - Task with condition only eligible when predecessor matches that specific status.
+func (s *Scheduler) isTaskEligible(ctx context.Context, task *domain.Task) bool {
+	// No dependency - eligible based on seq order alone.
+	if !task.DependsOn.Valid {
+		return true
+	}
+
+	// Fetch the predecessor task.
+	predecessor, err := s.taskRepo.FindByID(ctx, task.DependsOn.String)
+	if err != nil {
+		s.logger.Warn("scheduler: failed to fetch predecessor task",
+			"task_id", task.ID,
+			"depends_on", task.DependsOn.String,
+			"error", err,
+		)
+		return false
+	}
+	if predecessor == nil {
+		s.logger.Warn("scheduler: predecessor task not found",
+			"task_id", task.ID,
+			"depends_on", task.DependsOn.String,
+		)
+		return false
+	}
+
+	// Check if predecessor is in terminal state.
+	if !predecessor.Status.IsTerminal() {
+		return false
+	}
+
+	// No specific condition - any terminal state is acceptable.
+	if !task.Condition.Valid {
+		return true
+	}
+
+	// Check if predecessor status matches the required condition.
+	requiredStatus := domain.TaskStatus(task.Condition.Int64)
+	return predecessor.Status == requiredStatus
 }
 
 // maybeResetContext checks if the task represents a story boundary transition

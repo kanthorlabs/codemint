@@ -51,6 +51,15 @@ func (m *mockTaskRepoForDaemon) ListBySession(_ context.Context, sessionID strin
 	}
 	return result, nil
 }
+func (m *mockTaskRepoForDaemon) ListPending(_ context.Context, sessionID string) ([]*domain.Task, error) {
+	var result []*domain.Task
+	for _, t := range m.tasks {
+		if t.SessionID == sessionID && (t.Status == domain.TaskStatusPending || t.Status == domain.TaskStatusAwaiting) {
+			result = append(result, t)
+		}
+	}
+	return result, nil
+}
 func (m *mockTaskRepoForDaemon) MostRecentActive(_ context.Context, sessionID string) (*domain.Task, error) {
 	for i := len(m.tasks) - 1; i >= 0; i-- {
 		t := m.tasks[i]

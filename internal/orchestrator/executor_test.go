@@ -68,6 +68,9 @@ func (m *mockTaskRepo) ListCoordinationAfter(_ context.Context, _ string, _ stri
 func (m *mockTaskRepo) ListBySession(_ context.Context, _ string) ([]*domain.Task, error) {
 	return nil, nil
 }
+func (m *mockTaskRepo) ListPending(_ context.Context, _ string) ([]*domain.Task, error) {
+	return nil, nil
+}
 func (m *mockTaskRepo) MostRecentActive(_ context.Context, _ string) (*domain.Task, error) {
 	return nil, nil
 }

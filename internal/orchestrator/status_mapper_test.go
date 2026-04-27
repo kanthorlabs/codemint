@@ -87,6 +87,10 @@ func (m *statusMapperMockTaskRepo) ListBySession(ctx context.Context, sessionID 
 	return nil, nil
 }
 
+func (m *statusMapperMockTaskRepo) ListPending(ctx context.Context, sessionID string) ([]*domain.Task, error) {
+	return nil, nil
+}
+
 func (m *statusMapperMockTaskRepo) MostRecentActive(ctx context.Context, sessionID string) (*domain.Task, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

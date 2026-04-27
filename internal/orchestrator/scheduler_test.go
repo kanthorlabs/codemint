@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"database/sql"
 	"sync"
 	"testing"
 	"time"
@@ -57,6 +58,18 @@ func (m *mockTaskRepoForScheduler) ListCoordinationAfter(_ context.Context, _ st
 }
 func (m *mockTaskRepoForScheduler) ListBySession(_ context.Context, _ string) ([]*domain.Task, error) {
 	return nil, nil
+}
+func (m *mockTaskRepoForScheduler) ListPending(_ context.Context, _ string) ([]*domain.Task, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Return remaining tasks starting from currentIndex
+	if m.currentIndex >= len(m.tasks) {
+		return nil, nil
+	}
+	result := make([]*domain.Task, len(m.tasks)-m.currentIndex)
+	copy(result, m.tasks[m.currentIndex:])
+	m.currentIndex++ // Advance for Next compatibility
+	return result, nil
 }
 func (m *mockTaskRepoForScheduler) MostRecentActive(_ context.Context, _ string) (*domain.Task, error) {
 	return nil, nil
@@ -530,5 +543,245 @@ func TestBackoffDuration(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("backoffDuration(%d) = %v, expected %v", tt.consecutiveErrors, got, tt.expected)
 		}
+	}
+}
+
+// --- Task Eligibility Tests (Story 2.0.2) ---
+
+// eligibilityMockTaskRepo is a mock for eligibility tests that allows
+// configuring task states for predecessor lookups.
+type eligibilityMockTaskRepo struct {
+	tasks map[string]*domain.Task
+}
+
+func newEligibilityMockTaskRepo() *eligibilityMockTaskRepo {
+	return &eligibilityMockTaskRepo{tasks: make(map[string]*domain.Task)}
+}
+
+func (m *eligibilityMockTaskRepo) addTask(t *domain.Task) {
+	m.tasks[t.ID] = t
+}
+
+func (m *eligibilityMockTaskRepo) FindByID(_ context.Context, taskID string) (*domain.Task, error) {
+	if t, ok := m.tasks[taskID]; ok {
+		return t, nil
+	}
+	return nil, nil
+}
+
+// Implement other interface methods as no-ops.
+func (m *eligibilityMockTaskRepo) Create(_ context.Context, _ *domain.Task) error { return nil }
+func (m *eligibilityMockTaskRepo) Next(_ context.Context, _ string) (*domain.Task, error) {
+	return nil, nil
+}
+func (m *eligibilityMockTaskRepo) ListPending(_ context.Context, _ string) ([]*domain.Task, error) {
+	return nil, nil
+}
+func (m *eligibilityMockTaskRepo) Claim(_ context.Context, _ string) error { return nil }
+func (m *eligibilityMockTaskRepo) UpdateStatus(_ context.Context, _ string, _ domain.TaskStatus, _ string) error {
+	return nil
+}
+func (m *eligibilityMockTaskRepo) UpdateTaskStatus(_ context.Context, _ string, _ domain.TaskStatus) error {
+	return nil
+}
+func (m *eligibilityMockTaskRepo) UpdateAssignee(_ context.Context, _ string, _ string) error {
+	return nil
+}
+func (m *eligibilityMockTaskRepo) FindInterrupted(_ context.Context, _ string) ([]*domain.Task, error) {
+	return nil, nil
+}
+func (m *eligibilityMockTaskRepo) ListCoordinationAfter(_ context.Context, _ string, _ string) ([]*domain.Task, error) {
+	return nil, nil
+}
+func (m *eligibilityMockTaskRepo) ListBySession(_ context.Context, _ string) ([]*domain.Task, error) {
+	return nil, nil
+}
+func (m *eligibilityMockTaskRepo) MostRecentActive(_ context.Context, _ string) (*domain.Task, error) {
+	return nil, nil
+}
+
+// TestScheduler_IsTaskEligible_NoDependency verifies that tasks without
+// depends_on are always eligible.
+func TestScheduler_IsTaskEligible_NoDependency(t *testing.T) {
+	repo := newEligibilityMockTaskRepo()
+	activeSession := &ActiveSession{
+		Session: &domain.Session{ID: idgen.MustNew()},
+	}
+	scheduler := NewScheduler(repo, nil, nil, activeSession, nil)
+
+	task := &domain.Task{
+		ID:        idgen.MustNew(),
+		SessionID: activeSession.Session.ID,
+		Type:      domain.TaskTypeCoding,
+		Status:    domain.TaskStatusPending,
+		// DependsOn is not set (NULL)
+	}
+
+	ctx := context.Background()
+	if !scheduler.isTaskEligible(ctx, task) {
+		t.Error("task without depends_on should be eligible")
+	}
+}
+
+// TestScheduler_IsTaskEligible_WaitForTerminal verifies that tasks with
+// depends_on wait until the predecessor reaches a terminal state.
+func TestScheduler_IsTaskEligible_WaitForTerminal(t *testing.T) {
+	repo := newEligibilityMockTaskRepo()
+	activeSession := &ActiveSession{
+		Session: &domain.Session{ID: idgen.MustNew()},
+	}
+	scheduler := NewScheduler(repo, nil, nil, activeSession, nil)
+
+	predecessorID := idgen.MustNew()
+	predecessor := &domain.Task{
+		ID:        predecessorID,
+		SessionID: activeSession.Session.ID,
+		Type:      domain.TaskTypeCoding,
+		Status:    domain.TaskStatusProcessing, // Not terminal
+	}
+	repo.addTask(predecessor)
+
+	task := &domain.Task{
+		ID:        idgen.MustNew(),
+		SessionID: activeSession.Session.ID,
+		Type:      domain.TaskTypeCoding,
+		Status:    domain.TaskStatusPending,
+		DependsOn: domain.NewNullString(predecessorID),
+		// Condition not set - any terminal state is OK
+	}
+
+	ctx := context.Background()
+
+	// Should NOT be eligible while predecessor is Processing.
+	if scheduler.isTaskEligible(ctx, task) {
+		t.Error("task should not be eligible while predecessor is Processing")
+	}
+
+	// Update predecessor to Success (terminal).
+	predecessor.Status = domain.TaskStatusSuccess
+
+	// Now should be eligible.
+	if !scheduler.isTaskEligible(ctx, task) {
+		t.Error("task should be eligible when predecessor is Success")
+	}
+}
+
+// TestScheduler_IsTaskEligible_WithCondition verifies that tasks with
+// a specific condition only become eligible when the predecessor matches.
+func TestScheduler_IsTaskEligible_WithCondition(t *testing.T) {
+	repo := newEligibilityMockTaskRepo()
+	activeSession := &ActiveSession{
+		Session: &domain.Session{ID: idgen.MustNew()},
+	}
+	scheduler := NewScheduler(repo, nil, nil, activeSession, nil)
+
+	predecessorID := idgen.MustNew()
+	predecessor := &domain.Task{
+		ID:        predecessorID,
+		SessionID: activeSession.Session.ID,
+		Type:      domain.TaskTypeConfirmation,
+		Status:    domain.TaskStatusSuccess, // Terminal, but not Failure
+	}
+	repo.addTask(predecessor)
+
+	// Task requires predecessor to be Failure (condition=4).
+	task := &domain.Task{
+		ID:        idgen.MustNew(),
+		SessionID: activeSession.Session.ID,
+		Type:      domain.TaskTypeCoding,
+		Status:    domain.TaskStatusPending,
+		DependsOn: domain.NewNullString(predecessorID),
+		Condition: sql.NullInt64{Int64: int64(domain.TaskStatusFailure), Valid: true},
+	}
+
+	ctx := context.Background()
+
+	// Should NOT be eligible because predecessor is Success, not Failure.
+	if scheduler.isTaskEligible(ctx, task) {
+		t.Error("task should not be eligible when predecessor status doesn't match condition")
+	}
+
+	// Update predecessor to Failure.
+	predecessor.Status = domain.TaskStatusFailure
+
+	// Now should be eligible.
+	if !scheduler.isTaskEligible(ctx, task) {
+		t.Error("task should be eligible when predecessor status matches condition")
+	}
+}
+
+// TestScheduler_IsTaskEligible_ConditionSuccess verifies routing based on Success condition.
+func TestScheduler_IsTaskEligible_ConditionSuccess(t *testing.T) {
+	repo := newEligibilityMockTaskRepo()
+	activeSession := &ActiveSession{
+		Session: &domain.Session{ID: idgen.MustNew()},
+	}
+	scheduler := NewScheduler(repo, nil, nil, activeSession, nil)
+
+	predecessorID := idgen.MustNew()
+	predecessor := &domain.Task{
+		ID:        predecessorID,
+		SessionID: activeSession.Session.ID,
+		Type:      domain.TaskTypeConfirmation,
+		Status:    domain.TaskStatusSuccess,
+	}
+	repo.addTask(predecessor)
+
+	// Task requires predecessor to be Success (condition=3).
+	taskOnSuccess := &domain.Task{
+		ID:        idgen.MustNew(),
+		SessionID: activeSession.Session.ID,
+		Type:      domain.TaskTypeCoding,
+		Status:    domain.TaskStatusPending,
+		DependsOn: domain.NewNullString(predecessorID),
+		Condition: sql.NullInt64{Int64: int64(domain.TaskStatusSuccess), Valid: true},
+	}
+
+	// Task requires predecessor to be Failure (condition=4).
+	taskOnFailure := &domain.Task{
+		ID:        idgen.MustNew(),
+		SessionID: activeSession.Session.ID,
+		Type:      domain.TaskTypeCoding,
+		Status:    domain.TaskStatusPending,
+		DependsOn: domain.NewNullString(predecessorID),
+		Condition: sql.NullInt64{Int64: int64(domain.TaskStatusFailure), Valid: true},
+	}
+
+	ctx := context.Background()
+
+	// Predecessor is Success, so taskOnSuccess should be eligible.
+	if !scheduler.isTaskEligible(ctx, taskOnSuccess) {
+		t.Error("taskOnSuccess should be eligible when predecessor is Success")
+	}
+
+	// Predecessor is Success, so taskOnFailure should NOT be eligible.
+	if scheduler.isTaskEligible(ctx, taskOnFailure) {
+		t.Error("taskOnFailure should not be eligible when predecessor is Success")
+	}
+}
+
+// TestScheduler_IsTaskEligible_PredecessorNotFound verifies behavior when
+// the predecessor task doesn't exist.
+func TestScheduler_IsTaskEligible_PredecessorNotFound(t *testing.T) {
+	repo := newEligibilityMockTaskRepo()
+	activeSession := &ActiveSession{
+		Session: &domain.Session{ID: idgen.MustNew()},
+	}
+	scheduler := NewScheduler(repo, nil, nil, activeSession, nil)
+
+	// Task depends on a non-existent predecessor.
+	task := &domain.Task{
+		ID:        idgen.MustNew(),
+		SessionID: activeSession.Session.ID,
+		Type:      domain.TaskTypeCoding,
+		Status:    domain.TaskStatusPending,
+		DependsOn: domain.NewNullString("non-existent-task-id"),
+	}
+
+	ctx := context.Background()
+
+	// Should NOT be eligible because predecessor doesn't exist.
+	if scheduler.isTaskEligible(ctx, task) {
+		t.Error("task should not be eligible when predecessor doesn't exist")
 	}
 }

@@ -59,6 +59,11 @@ type TaskRepository interface {
 	// task hierarchy with status indicators.
 	ListBySession(ctx context.Context, sessionID string) ([]*domain.Task, error)
 
+	// ListPending returns all pending tasks (status Pending=0 or Awaiting=2) in
+	// the given session, ordered by (seq_epic, seq_story, seq_task) ASC.
+	// Used by the Scheduler to evaluate eligibility based on depends_on/condition.
+	ListPending(ctx context.Context, sessionID string) ([]*domain.Task, error)
+
 	// MostRecentActive returns the most recently active task in the session
 	// that is in Processing (1) or Awaiting (2) status. Used by /summary command
 	// to default to the current active task when no task ID is specified.

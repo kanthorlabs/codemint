@@ -80,6 +80,20 @@ const (
 	TaskStatusCancelled                    // 7
 )
 
+// IsTerminal returns true if the status represents a completed/final state.
+// Terminal statuses are: Success, Failure, Completed, Reverted, Cancelled.
+func (s TaskStatus) IsTerminal() bool {
+	switch s {
+	case TaskStatusSuccess,
+		TaskStatusFailure,
+		TaskStatusCompleted,
+		TaskStatusReverted,
+		TaskStatusCancelled:
+		return true
+	}
+	return false
+}
+
 // AgentType represents the category of an agent actor.
 type AgentType int
 
@@ -192,6 +206,15 @@ type Task struct {
 	Input    sql.NullString `db:"input"`
 	Output   sql.NullString `db:"output"`
 	ClientID sql.NullString `db:"client_id"` // Format: "{mode}:{uuid}", NULL for AI-created tasks
+
+	// DependsOn is the task ID this task waits for before becoming eligible.
+	// NULL means no dependency (eligible based on seq order alone).
+	DependsOn sql.NullString `db:"depends_on"`
+
+	// Condition is the required TaskStatus of the DependsOn task.
+	// NULL means any terminal status is acceptable. If set, only proceeds
+	// when the predecessor task reaches this specific status.
+	Condition sql.NullInt64 `db:"condition"`
 }
 
 // --- Null Helpers ---
