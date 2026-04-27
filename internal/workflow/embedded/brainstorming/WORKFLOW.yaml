@@ -1,0 +1,42 @@
+# Required metadata
+name: brainstorming
+version: "1.0"
+description: |
+  5-phase brainstorming pipeline for feature planning.
+  Guides users through context gathering, specification clarification,
+  and task generation for new features.
+
+# Workflow-level settings
+settings:
+  default_timeout: 3600000  # 1 hour per task (ms)
+  guardrails:
+    verification: true      # Auto-inject verification after coding stories
+    confirmation: true      # Auto-inject confirmation after stories
+    retrospective: true     # Auto-inject retrospective at end of epic
+
+# Epic → Story hierarchy
+epics:
+  - id: planning
+    name: "Feature Planning"
+    description: "Gather context, clarify requirements, generate tasks"
+
+    stories:
+      - id: gather
+        name: "Context Intake"
+        skill: "@codemint/gatherer"
+        type: coding
+
+      - id: clarify
+        name: "Specification Clarification"
+        skill: "@codemint/spec-writer"
+        type: coding
+        exit_on:
+          command: "/generate"
+
+      - id: generate
+        name: "Task Generation"
+        skill: "@codemint/task-generator"
+        type: coding
+        output:
+          schema: "skills/task-generator/references/task-schema.json"
+          handler: "create_implementation_tasks"

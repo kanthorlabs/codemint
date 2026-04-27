@@ -166,14 +166,25 @@ func run() error {
 		log.Printf("Loaded %d workflow(s) from config", workflowReg.Len())
 	}
 
-	// Step 9a: Create Provider Registry (Story 3.22).
+	// Step 9b: Create Workflow File Registry (Story 2.0.1).
+	// Loads WORKFLOW.yaml files from embedded and external sources.
+	workflowFileReg := workflow.NewFileRegistry()
+	if err := workflowFileReg.LoadAll(); err != nil {
+		log.Printf("Warning: failed to load workflow files: %v", err)
+	} else if workflowFileReg.Len() > 0 {
+		log.Printf("Loaded %d workflow file(s): %v", workflowFileReg.Len(), workflowFileReg.Names())
+	}
+	// Note: workflowFileReg will be passed to command registration in Story 2.0.4
+	_ = workflowFileReg // Suppress unused warning until Story 2.0.4
+
+	// Step 9c: Create Provider Registry (Story 3.22).
 	// This merges builtin catalog with config overrides.
 	providerRegistry, err := agent.NewProviderRegistry(appCfg)
 	if err != nil {
 		return fmt.Errorf("create provider registry: %w", err)
 	}
 
-	// Step 9b: Resolve System Assistant provider.
+	// Step 9d: Resolve System Assistant provider.
 	// This handles CODEMINT_ACP_CMD env override for backward compatibility.
 	systemProviderName := appCfg.Assistants.System.Provider
 	systemProvider, providerErr := agent.ResolveSystemAssistantProvider(providerRegistry, systemProviderName)
@@ -192,7 +203,7 @@ func run() error {
 		}
 	}
 
-	// Step 9c: Create ACP worker registry with provider-based config.
+	// Step 9e: Create ACP worker registry with provider-based config.
 	// The registry is created lazily - workers are only spawned when needed.
 	var acpRegistry *acp.Registry
 	if systemProvider != nil {
@@ -202,7 +213,7 @@ func run() error {
 		// Fallback to default config if no provider resolved
 		acpRegistry = acp.NewRegistry(acp.DefaultConfig())
 	}
-	// Step 9d: Create ACP Runtime.
+	// Step 9f: Create ACP Runtime.
 	// The Runtime wires together Pipeline, Interceptor, StatusMapper, Fanout, and BufferRegistry.
 	bufferRegistry := acp.NewBufferRegistry(acp.DefaultBufferCapacity)
 
@@ -219,7 +230,7 @@ func run() error {
 		log.Fatalf("Failed to create ACP runtime: %v", err)
 	}
 
-	// Step 9e: Create System Assistant if enabled (Story 3.19).
+	// Step 9g: Create System Assistant if enabled (Story 3.19).
 	var systemAssistant agent.SystemAssistant
 	if cfg.withAssistant && systemProvider != nil {
 		sa, saErr := agent.NewACPAssistant(agent.ACPAssistantConfig{
