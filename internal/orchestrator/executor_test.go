@@ -1187,39 +1187,36 @@ func TestExecutor_Coding_BuildsTypedParams(t *testing.T) {
 		t.Fatalf("failed to unmarshal params: %v", err)
 	}
 
-	// Verify prompt
-	if len(params.Prompt) != 1 || params.Prompt[0].Type != "text" || params.Prompt[0].Text != "Implement feature X" {
-		t.Errorf("prompt mismatch: got %v", params.Prompt)
+	// Verify prompt - should have text + 2 resource_link blocks
+	// Per ACP spec, context files are sent as resource_link ContentBlocks
+	if len(params.Prompt) != 3 {
+		t.Fatalf("expected 3 prompt blocks (1 text + 2 resource_link), got %d", len(params.Prompt))
 	}
 
-	// Verify context files (should be absolute paths)
-	if len(params.Context) != 2 {
-		t.Fatalf("expected 2 context refs, got %d", len(params.Context))
+	// First block should be text
+	if params.Prompt[0].Type != "text" || params.Prompt[0].Text != "Implement feature X" {
+		t.Errorf("prompt[0] mismatch: got type=%s text=%s", params.Prompt[0].Type, params.Prompt[0].Text)
 	}
 
+	// Verify context files as resource_link blocks
 	expectedPath1 := filepath.Join(tmpDir, "src", "main.go")
 	expectedPath2 := filepath.Join(tmpDir, "src", "helper.go")
 
-	if params.Context[0].Path != expectedPath1 {
-		t.Errorf("context[0].Path mismatch: got %q, want %q", params.Context[0].Path, expectedPath1)
+	if params.Prompt[1].Type != "resource_link" {
+		t.Errorf("prompt[1].Type = %q, want resource_link", params.Prompt[1].Type)
 	}
-	if params.Context[0].Kind != "file" {
-		t.Errorf("context[0].Kind mismatch: got %q, want %q", params.Context[0].Kind, "file")
+	if params.Prompt[1].URI != "file://"+expectedPath1 {
+		t.Errorf("prompt[1].URI = %q, want %q", params.Prompt[1].URI, "file://"+expectedPath1)
 	}
-	if params.Context[1].Path != expectedPath2 {
-		t.Errorf("context[1].Path mismatch: got %q, want %q", params.Context[1].Path, expectedPath2)
+	if params.Prompt[2].Type != "resource_link" {
+		t.Errorf("prompt[2].Type = %q, want resource_link", params.Prompt[2].Type)
+	}
+	if params.Prompt[2].URI != "file://"+expectedPath2 {
+		t.Errorf("prompt[2].URI = %q, want %q", params.Prompt[2].URI, "file://"+expectedPath2)
 	}
 
-	// Verify tools
-	if len(params.Tools) != 3 {
-		t.Fatalf("expected 3 tools, got %d", len(params.Tools))
-	}
-	expectedTools := []string{"read", "write", "bash"}
-	for i, expected := range expectedTools {
-		if params.Tools[i] != expected {
-			t.Errorf("tools[%d] mismatch: got %q, want %q", i, params.Tools[i], expected)
-		}
-	}
+	// Note: Tools are NOT sent via session/prompt per ACP spec.
+	// They should be provided via MCP servers if needed.
 }
 
 // TestExecutor_Coding_PathEscapeFailsGracefully verifies that path escape

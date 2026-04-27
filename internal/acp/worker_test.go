@@ -14,10 +14,9 @@ import (
 // mockACPScript provides a builder for creating mock ACP server bash scripts.
 // It handles the common patterns needed for testing Worker functionality.
 type mockACPScript struct {
-	// capabilities configures the initialize response
+	// capabilities configures the initialize response (spec-compliant)
 	capabilities struct {
-		streaming bool
-		toolCalls bool
+		loadSession bool
 	}
 	// sessionID is returned by session/new response
 	sessionID string
@@ -70,9 +69,9 @@ func newMockACPScript() *mockACPScript {
 }
 
 // withCapabilities sets the capabilities in the initialize response.
-func (m *mockACPScript) withCapabilities(streaming, toolCalls bool) *mockACPScript {
-	m.capabilities.streaming = streaming
-	m.capabilities.toolCalls = toolCalls
+// Per ACP spec, capabilities use agentCapabilities with loadSession etc.
+func (m *mockACPScript) withCapabilities(loadSession, _ bool) *mockACPScript {
+	m.capabilities.loadSession = loadSession
 	return m
 }
 
@@ -163,12 +162,13 @@ func (m *mockACPScript) build() string {
 }
 
 // buildHandshake writes the standard initialize + session/new handshake.
+// Per ACP spec: InitializeResult has protocolVersion, agentInfo, agentCapabilities, authMethods
 func (m *mockACPScript) buildHandshake(sb *strings.Builder) {
-	// Initialize response
+	// Initialize response (spec-compliant format)
 	sb.WriteString("read line\n")
 	sb.WriteString("id=$(echo \"$line\" | grep -o '\"id\":[0-9]*' | cut -d':' -f2)\n")
-	capsJSON := m.capabilitiesJSON()
-	sb.WriteString(fmt.Sprintf("echo \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":{\\\"serverInfo\\\":{\\\"name\\\":\\\"mock\\\",\\\"version\\\":\\\"1.0.0\\\"},\\\"capabilities\\\":%s}}\"\n", capsJSON))
+	capsJSON := m.agentCapabilitiesJSON()
+	sb.WriteString(fmt.Sprintf("echo \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":{\\\"protocolVersion\\\":1,\\\"agentInfo\\\":{\\\"name\\\":\\\"mock\\\",\\\"version\\\":\\\"1.0.0\\\"},\\\"agentCapabilities\\\":%s}}\"\n", capsJSON))
 	sb.WriteString("\n")
 
 	// Session/new response
@@ -185,10 +185,10 @@ func (m *mockACPScript) buildMethodLoop(sb *strings.Builder) {
 	sb.WriteString("    id=$(echo \"$line\" | grep -o '\"id\":[0-9]*' | cut -d':' -f2)\n")
 	sb.WriteString("    \n")
 
-	// Always handle initialize
-	capsJSON := m.capabilitiesJSON()
+	// Always handle initialize (spec-compliant format)
+	capsJSON := m.agentCapabilitiesJSON()
 	sb.WriteString("    if [ \"$method\" = \"initialize\" ]; then\n")
-	sb.WriteString(fmt.Sprintf("        echo \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":{\\\"serverInfo\\\":{\\\"name\\\":\\\"mock\\\",\\\"version\\\":\\\"1.0.0\\\"},\\\"capabilities\\\":%s}}\"\n", capsJSON))
+	sb.WriteString(fmt.Sprintf("        echo \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":{\\\"protocolVersion\\\":1,\\\"agentInfo\\\":{\\\"name\\\":\\\"mock\\\",\\\"version\\\":\\\"1.0.0\\\"},\\\"agentCapabilities\\\":%s}}\"\n", capsJSON))
 
 	// Always handle session/new
 	sb.WriteString("    elif [ \"$method\" = \"session/new\" ]; then\n")
@@ -218,19 +218,13 @@ func (m *mockACPScript) buildMethodLoop(sb *strings.Builder) {
 	sb.WriteString("done\n")
 }
 
-// capabilitiesJSON returns the capabilities as a JSON object string.
-func (m *mockACPScript) capabilitiesJSON() string {
-	if !m.capabilities.streaming && !m.capabilities.toolCalls {
+// agentCapabilitiesJSON returns the agentCapabilities as a JSON object string.
+// Per ACP spec: AgentCapabilities has loadSession, mcpCapabilities, promptCapabilities, sessionCapabilities
+func (m *mockACPScript) agentCapabilitiesJSON() string {
+	if !m.capabilities.loadSession {
 		return "{}"
 	}
-	parts := []string{}
-	if m.capabilities.streaming {
-		parts = append(parts, "\\\"streaming\\\":true")
-	}
-	if m.capabilities.toolCalls {
-		parts = append(parts, "\\\"toolCalls\\\":true")
-	}
-	return "{" + strings.Join(parts, ",") + "}"
+	return "{\\\"loadSession\\\":true}"
 }
 
 // writeTo writes the script to a file and returns the path.
@@ -275,13 +269,13 @@ func TestWorker_Echo(t *testing.T) {
 		spawnWorker(t, ctx)
 	defer worker.Stop()
 
-	// Verify capabilities were set
+	// Verify capabilities were set (spec-compliant format)
 	caps := worker.Capabilities()
-	if caps.ServerInfo.Name != "mock" {
-		t.Errorf("ServerInfo.Name = %q; want %q", caps.ServerInfo.Name, "mock")
+	if caps.AgentInfo == nil || caps.AgentInfo.Name != "mock" {
+		t.Errorf("AgentInfo.Name = %q; want %q", caps.AgentInfo.Name, "mock")
 	}
-	if !caps.Capabilities.Streaming {
-		t.Error("Capabilities.Streaming = false; want true")
+	if !caps.AgentCapabilities.LoadSession {
+		t.Error("AgentCapabilities.LoadSession = false; want true")
 	}
 
 	// Send a test request

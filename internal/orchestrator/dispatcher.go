@@ -184,8 +184,12 @@ func (d *Dispatcher) dispatchToSystemAssistant(ctx context.Context, active *Acti
 		IsCodeMint:  active.IsCodeMintSession(),
 	}
 
+	var sessionID string
+	if active.Session != nil {
+		sessionID = active.Session.ID
+	}
 	slog.Info("dispatcher: calling system assistant Ask",
-		"session_id", active.Session.ID,
+		"session_id", sessionID,
 		"is_codemint", sess.IsCodeMint,
 	)
 

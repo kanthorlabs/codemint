@@ -362,7 +362,10 @@ func (e *Executor) executeCoding(ctx context.Context, sess *ActiveSession, task 
 	}
 
 	// 5. Resolve context files relative to project working directory.
-	var contextRefs []acp.PromptContextRef
+	// Per ACP spec, context is sent as resource_link ContentBlocks in the prompt.
+	var promptBlocks []acp.ContentBlock
+	promptBlocks = append(promptBlocks, acp.TextContent(taskInput.Prompt))
+
 	if len(taskInput.ContextFiles) > 0 {
 		resolvedPaths, err := resolveContextFiles(sess.Project, taskInput.ContextFiles)
 		if err != nil {
@@ -380,21 +383,22 @@ func (e *Executor) executeCoding(ctx context.Context, sess *ActiveSession, task 
 			return nil // Per-task failure, don't kill the scheduler
 		}
 
-		contextRefs = make([]acp.PromptContextRef, len(resolvedPaths))
-		for i, path := range resolvedPaths {
-			contextRefs[i] = acp.PromptContextRef{
-				Path: path,
-				Kind: "file",
-			}
+		// Convert context files to resource_link content blocks per ACP spec
+		for _, path := range resolvedPaths {
+			promptBlocks = append(promptBlocks, acp.ResourceLinkContent(
+				"file://"+path,
+				filepath.Base(path),
+				"", // Let agent determine mime type
+			))
 		}
 	}
 
-	// 6. Build and send session/prompt request with context and tools.
+	// 6. Build and send session/prompt request.
+	// Note: Tools are not sent via session/prompt per ACP spec.
+	// They should be provided via MCP servers if needed.
 	params := acp.SessionPromptParams{
 		SessionID: sess.GetACPSessionID(),
-		Prompt:    []acp.ContentBlock{acp.TextContent(taskInput.Prompt)},
-		Context:   contextRefs,
-		Tools:     taskInput.Tools,
+		Prompt:    promptBlocks,
 	}
 
 	req, err := acp.NewRequest(acp.MethodSessionPrompt, params)

@@ -313,13 +313,18 @@ func acpStatusHandler(deps *ACPCommandDeps) registry.Handler {
 		sb.WriteString("ACP Worker Status:\n\n")
 
 		caps := worker.Capabilities()
-		fmt.Fprintf(&sb, "  PID:        %d\n", worker.Pid())
-		fmt.Fprintf(&sb, "  CWD:        %s\n", worker.Cwd())
-		fmt.Fprintf(&sb, "  Server:     %s v%s\n", caps.ServerInfo.Name, caps.ServerInfo.Version)
-		fmt.Fprintf(&sb, "  Streaming:  %v\n", caps.Capabilities.Streaming)
-		fmt.Fprintf(&sb, "  Tool Calls: %v\n", caps.Capabilities.ToolCalls)
-		fmt.Fprintf(&sb, "  Planning:   %v\n", caps.Capabilities.Planning)
-		fmt.Fprintf(&sb, "  ACP Session: %s\n", deps.ActiveSession.GetACPSessionID())
+		agentName := ""
+		agentVersion := ""
+		if caps.AgentInfo != nil {
+			agentName = caps.AgentInfo.Name
+			agentVersion = caps.AgentInfo.Version
+		}
+		fmt.Fprintf(&sb, "  PID:             %d\n", worker.Pid())
+		fmt.Fprintf(&sb, "  CWD:             %s\n", worker.Cwd())
+		fmt.Fprintf(&sb, "  Agent:           %s v%s\n", agentName, agentVersion)
+		fmt.Fprintf(&sb, "  Protocol:        %d\n", caps.ProtocolVersion)
+		fmt.Fprintf(&sb, "  Load Session:    %v\n", caps.AgentCapabilities.LoadSession)
+		fmt.Fprintf(&sb, "  ACP Session:     %s\n", deps.ActiveSession.GetACPSessionID())
 
 		return registry.CommandResult{
 			Message: sb.String(),

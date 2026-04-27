@@ -35,6 +35,17 @@ var ErrWorkerNotStarted = errors.New("acp: worker not started")
 // ErrWorkerClosed is returned when attempting to reset context on a closed worker.
 var ErrWorkerClosed = errors.New("acp: worker is closed")
 
+// ACP-specific sentinel errors mapped from error codes.
+// These are returned by SendRequest when the response contains the corresponding error code.
+var (
+	// ErrAuthRequired indicates that authentication is required (code -32000).
+	ErrAuthRequired = errors.New("acp: authentication required")
+	// ErrSessionNotFound indicates that the session does not exist (code -32001).
+	ErrSessionNotFound = errors.New("acp: session not found")
+	// ErrResourceNotFound indicates that a resource was not found (code -32002).
+	ErrResourceNotFound = errors.New("acp: resource not found")
+)
+
 // WorkerConfig configures the ACP worker process.
 type WorkerConfig struct {
 	Command          string        // Executable name or path (default: "opencode")
@@ -461,12 +472,14 @@ func (w *Worker) ResetContext(ctx context.Context, currentSessionID string) (str
 	return newSessionID, nil
 }
 
-// createSession creates a new ACP session with optional system prompt.
+// createSession creates a new ACP session.
+// Note: System prompt is NOT sent via SessionNewParams (not in ACP spec).
+// If you need to inject a system prompt, send it as the first ContentBlock
+// in the first session/prompt call.
 func (w *Worker) createSession(ctx context.Context, systemPrompt string) (string, error) {
 	newParams := SessionNewParams{
-		SystemPrompt: systemPrompt,
-		Cwd:          w.cfg.Cwd,
-		McpServers:   []McpServer{}, // Empty for now; MCP server support can be added later
+		Cwd:        w.cfg.Cwd,
+		McpServers: []McpServer{}, // Empty for now; MCP server support can be added later
 	}
 	newReq, err := NewRequest(MethodSessionNew, newParams)
 	if err != nil {
@@ -513,11 +526,20 @@ func (w *Worker) SystemPrompt() string {
 func (w *Worker) initialize(ctx context.Context) error {
 	params := InitializeParams{
 		ProtocolVersion: 1, // ACP protocol version
-		ClientInfo: ClientInfo{
+		ClientInfo: &Implementation{
 			Name:    "codemint",
 			Version: "0.1.0",
 		},
-		WorkingDir: w.cfg.Cwd,
+		// Declare capabilities truthfully: CodeMint does NOT implement fs/* or terminal/*
+		// methods — agents read/write files directly via OS, and CodeMint runs shell
+		// commands via internal/orchestrator/local_runner.go, not via ACP terminals.
+		ClientCapabilities: ClientCapabilities{
+			FS: &FSCapabilities{
+				ReadTextFile:  false,
+				WriteTextFile: false,
+			},
+			Terminal: false,
+		},
 	}
 
 	req, err := NewRequest(MethodInitialize, params)
@@ -545,11 +567,18 @@ func (w *Worker) initialize(ctx context.Context) error {
 		return fmt.Errorf("acp: parse initialize result: %w", err)
 	}
 
+	agentName := ""
+	agentVersion := ""
+	if w.capabilities.AgentInfo != nil {
+		agentName = w.capabilities.AgentInfo.Name
+		agentVersion = w.capabilities.AgentInfo.Version
+	}
+
 	slog.Debug("acp: initialized",
-		"server", w.capabilities.ServerInfo.Name,
-		"version", w.capabilities.ServerInfo.Version,
-		"streaming", w.capabilities.Capabilities.Streaming,
-		"toolCalls", w.capabilities.Capabilities.ToolCalls,
+		"agent", agentName,
+		"version", agentVersion,
+		"protocolVersion", w.capabilities.ProtocolVersion,
+		"loadSession", w.capabilities.AgentCapabilities.LoadSession,
 	)
 
 	return nil

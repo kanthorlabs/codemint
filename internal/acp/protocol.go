@@ -23,13 +23,29 @@ const (
 )
 
 // UpdateKind constants for session update notifications.
+// Per ACP spec: https://agentclientprotocol.com/protocol/schema.md (SessionUpdate union)
 const (
+	// Core message updates
 	UpdateKindUserMessageChunk  = "user_message_chunk"
 	UpdateKindAgentMessageChunk = "agent_message_chunk"
 	UpdateKindAgentThoughtChunk = "agent_thought_chunk"
-	UpdateKindToolCall          = "tool_call"
-	UpdateKindToolCallUpdate    = "tool_call_update"
-	UpdateKindPlan              = "plan"
+
+	// Tool-related updates
+	UpdateKindToolCall       = "tool_call"
+	UpdateKindToolCallUpdate = "tool_call_update"
+
+	// Planning update
+	UpdateKindPlan = "plan"
+
+	// Turn lifecycle updates
+	UpdateKindTurnStart = "turn_start"
+	UpdateKindTurnEnd   = "turn_end"
+
+	// Session state updates
+	UpdateKindSessionInfoUpdate       = "session_info_update"
+	UpdateKindAvailableCommandsUpdate = "available_commands_update"
+	UpdateKindCurrentModeUpdate       = "current_mode_update"
+	UpdateKindConfigOptionUpdate      = "config_option_update"
 )
 
 // Standard JSON-RPC 2.0 error codes.
@@ -40,6 +56,124 @@ const (
 	ErrCodeInvalidParams  = -32602
 	ErrCodeInternalError  = -32603
 )
+
+// ACP-specific error codes.
+const (
+	// ErrCodeAuthRequired indicates that authentication is required before
+	// the operation can proceed. The client should call authenticate.
+	ErrCodeAuthRequired = -32000
+	// ErrCodeSessionNotFound indicates the specified session does not exist.
+	ErrCodeSessionNotFound = -32001
+	// ErrCodeResourceNotFound indicates that the requested resource
+	// (session, terminal, etc.) was not found.
+	ErrCodeResourceNotFound = -32002
+)
+
+// StopReason indicates why the agent stopped processing a turn.
+type StopReason string
+
+const (
+	// StopReasonEndTurn indicates the language model finished responding
+	// without requesting more tools.
+	StopReasonEndTurn StopReason = "end_turn"
+	// StopReasonMaxTokens indicates the maximum token limit was reached.
+	StopReasonMaxTokens StopReason = "max_tokens"
+	// StopReasonMaxTurnRequests indicates the maximum number of model requests
+	// in a single turn was exceeded.
+	StopReasonMaxTurnRequests StopReason = "max_turn_requests"
+	// StopReasonRefusal indicates the agent refuses to continue.
+	StopReasonRefusal StopReason = "refusal"
+	// StopReasonCancelled indicates the client cancelled the turn.
+	StopReasonCancelled StopReason = "cancelled"
+)
+
+// PermissionOptionKind is a hint to help clients choose appropriate icons
+// and UI treatment for permission options.
+type PermissionOptionKind string
+
+const (
+	// PermissionKindAllowOnce allows this operation only this time.
+	PermissionKindAllowOnce PermissionOptionKind = "allow_once"
+	// PermissionKindAllowAlways allows this operation and remembers the choice.
+	PermissionKindAllowAlways PermissionOptionKind = "allow_always"
+	// PermissionKindRejectOnce rejects this operation only this time.
+	PermissionKindRejectOnce PermissionOptionKind = "reject_once"
+	// PermissionKindRejectAlways rejects this operation and remembers the choice.
+	PermissionKindRejectAlways PermissionOptionKind = "reject_always"
+)
+
+// ToolCallStatus indicates the current status of a tool call.
+type ToolCallStatus string
+
+const (
+	ToolCallStatusPending    ToolCallStatus = "pending"
+	ToolCallStatusInProgress ToolCallStatus = "in_progress"
+	ToolCallStatusCompleted  ToolCallStatus = "completed"
+	ToolCallStatusFailed     ToolCallStatus = "failed"
+)
+
+// PlanEntryPriority indicates the priority of a plan entry.
+type PlanEntryPriority string
+
+const (
+	PlanEntryPriorityHigh   PlanEntryPriority = "high"
+	PlanEntryPriorityMedium PlanEntryPriority = "medium"
+	PlanEntryPriorityLow    PlanEntryPriority = "low"
+)
+
+// PlanEntryStatus indicates the status of a plan entry.
+type PlanEntryStatus string
+
+const (
+	PlanEntryStatusPending    PlanEntryStatus = "pending"
+	PlanEntryStatusInProgress PlanEntryStatus = "in_progress"
+	PlanEntryStatusCompleted  PlanEntryStatus = "completed"
+)
+
+// PlanEntry represents a single entry in an agent plan.
+type PlanEntry struct {
+	Content  string            `json:"content"`
+	Priority PlanEntryPriority `json:"priority,omitempty"`
+	Status   PlanEntryStatus   `json:"status,omitempty"`
+}
+
+// PlanUpdate represents a plan session update.
+type PlanUpdate struct {
+	SessionUpdate string      `json:"sessionUpdate"` // always "plan"
+	Entries       []PlanEntry `json:"entries"`
+}
+
+// SlashCommand represents a slash command advertised by the agent.
+type SlashCommand struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// AvailableCommandsUpdate represents an available_commands_update notification.
+type AvailableCommandsUpdate struct {
+	SessionUpdate string         `json:"sessionUpdate"` // always "available_commands_update"
+	Commands      []SlashCommand `json:"commands"`
+}
+
+// CurrentModeUpdate represents a current_mode_update notification.
+type CurrentModeUpdate struct {
+	SessionUpdate string `json:"sessionUpdate"` // always "current_mode_update"
+	ModeID        string `json:"modeId"`
+}
+
+// ConfigOptionUpdate represents a config_option_update notification.
+type ConfigOptionUpdate struct {
+	SessionUpdate string `json:"sessionUpdate"` // always "config_option_update"
+	OptionID      string `json:"optionId"`
+	ValueID       string `json:"valueId"`
+}
+
+// SessionInfoUpdate represents a session_info_update notification.
+type SessionInfoUpdate struct {
+	SessionUpdate string                `json:"sessionUpdate"` // always "session_info_update"
+	ConfigOptions []SessionConfigOption `json:"configOptions,omitempty"`
+	Modes         *SessionModeState     `json:"modes,omitempty"`
+}
 
 // idCounter generates unique request IDs.
 var idCounter atomic.Int64
@@ -97,10 +231,26 @@ func (e *RPCError) Error() string {
 	return fmt.Sprintf("rpc error %d: %s", e.Code, e.Message)
 }
 
+// IsAuthRequired returns true if this is an authentication required error.
+func (e *RPCError) IsAuthRequired() bool {
+	return e.Code == ErrCodeAuthRequired
+}
+
+// IsSessionNotFound returns true if this is a session not found error.
+func (e *RPCError) IsSessionNotFound() bool {
+	return e.Code == ErrCodeSessionNotFound
+}
+
+// IsResourceNotFound returns true if this is a resource not found error.
+func (e *RPCError) IsResourceNotFound() bool {
+	return e.Code == ErrCodeResourceNotFound
+}
+
 // SessionUpdate represents a session/update notification payload.
 type SessionUpdate struct {
-	SessionID string     `json:"sessionId"`
-	Update    UpdateBody `json:"update"`
+	SessionID string          `json:"sessionId"`
+	Update    UpdateBody      `json:"update"`
+	Meta      json.RawMessage `json:"_meta,omitempty"` // Opaque passthrough for agent-specific data
 }
 
 // UpdateBody represents the update content within a session update.
@@ -137,41 +287,80 @@ func (u UpdateBody) MarshalJSON() ([]byte, error) {
 }
 
 // InitializeParams represents the parameters for the initialize request.
+// Per ACP spec: https://agentclientprotocol.com/protocol/initialization
 type InitializeParams struct {
-	ProtocolVersion int        `json:"protocolVersion"`
-	ClientInfo      ClientInfo `json:"clientInfo"`
-	Capabilities    Caps       `json:"capabilities"`
-	WorkingDir      string     `json:"workingDir,omitempty"`
+	ProtocolVersion    int                `json:"protocolVersion"`
+	ClientInfo         *Implementation    `json:"clientInfo,omitempty"`
+	ClientCapabilities ClientCapabilities `json:"clientCapabilities,omitempty"`
 }
 
-// ClientInfo identifies the client to the ACP server.
-type ClientInfo struct {
+// Implementation identifies a client or agent implementation.
+// Per ACP spec, this will be required in future protocol versions.
+type Implementation struct {
 	Name    string `json:"name"`
+	Title   string `json:"title,omitempty"`
 	Version string `json:"version"`
 }
 
-// Caps represents client capabilities.
-type Caps struct {
-	// Add capability flags as needed
+// ClientCapabilities represents capabilities supported by the client.
+// Per ACP spec: https://agentclientprotocol.com/protocol/initialization#client-capabilities
+type ClientCapabilities struct {
+	FS       *FSCapabilities `json:"fs,omitempty"`
+	Terminal bool            `json:"terminal,omitempty"`
+}
+
+// FSCapabilities represents file system capabilities.
+type FSCapabilities struct {
+	ReadTextFile  bool `json:"readTextFile,omitempty"`
+	WriteTextFile bool `json:"writeTextFile,omitempty"`
 }
 
 // InitializeResult represents the result of the initialize request.
+// Per ACP spec: https://agentclientprotocol.com/protocol/initialization
 type InitializeResult struct {
-	ServerInfo   ServerInfo `json:"serverInfo"`
-	Capabilities ServerCaps `json:"capabilities"`
+	ProtocolVersion   int               `json:"protocolVersion"`
+	AgentInfo         *Implementation   `json:"agentInfo,omitempty"`
+	AgentCapabilities AgentCapabilities `json:"agentCapabilities,omitempty"`
+	AuthMethods       []AuthMethod      `json:"authMethods,omitempty"`
+	Meta              json.RawMessage   `json:"_meta,omitempty"` // Opaque passthrough for agent-specific data
 }
 
-// ServerInfo identifies the ACP server.
-type ServerInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+// AgentCapabilities represents capabilities supported by the agent.
+// Per ACP spec: https://agentclientprotocol.com/protocol/initialization#agent-capabilities
+type AgentCapabilities struct {
+	LoadSession         bool                 `json:"loadSession,omitempty"`
+	McpCapabilities     *McpCapabilities     `json:"mcpCapabilities,omitempty"`
+	PromptCapabilities  *PromptCapabilities  `json:"promptCapabilities,omitempty"`
+	SessionCapabilities *SessionCapabilities `json:"sessionCapabilities,omitempty"`
 }
 
-// ServerCaps represents server capabilities.
-type ServerCaps struct {
-	Streaming bool `json:"streaming,omitempty"`
-	ToolCalls bool `json:"toolCalls,omitempty"`
-	Planning  bool `json:"planning,omitempty"`
+// McpCapabilities indicates which MCP transports the agent supports.
+type McpCapabilities struct {
+	HTTP bool `json:"http,omitempty"`
+	SSE  bool `json:"sse,omitempty"`
+}
+
+// PromptCapabilities indicates which content types are supported in prompts.
+type PromptCapabilities struct {
+	Image           bool `json:"image,omitempty"`
+	Audio           bool `json:"audio,omitempty"`
+	EmbeddedContext bool `json:"embeddedContext,omitempty"`
+}
+
+// SessionCapabilities indicates which session methods are supported.
+type SessionCapabilities struct {
+	Resume *struct{} `json:"resume,omitempty"`
+	Close  *struct{} `json:"close,omitempty"`
+	List   *struct{} `json:"list,omitempty"`
+}
+
+// AuthMethod describes an available authentication method.
+type AuthMethod struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// Type can be "agent" (default) or other future types
+	Type string `json:"type,omitempty"`
 }
 
 // McpEnvVariable represents an environment variable for MCP server configuration.
@@ -190,24 +379,90 @@ type McpServer struct {
 }
 
 // SessionNewParams represents the parameters for session/new.
+// Per ACP spec: https://agentclientprotocol.com/protocol/session-setup#creating-a-session
 type SessionNewParams struct {
-	SessionID    string      `json:"sessionId,omitempty"`    // optional; server generates if empty
-	SystemPrompt string      `json:"systemPrompt,omitempty"` // optional; injected memory/context for the session
-	Cwd          string      `json:"cwd"`                    // required; working directory for the session
-	McpServers   []McpServer `json:"mcpServers"`             // required; MCP server configurations (can be empty array)
+	Cwd        string      `json:"cwd"`        // required; working directory (absolute path)
+	McpServers []McpServer `json:"mcpServers"` // required; MCP server configurations (can be empty array)
 }
 
 // SessionNewResult represents the result of session/new.
 type SessionNewResult struct {
-	SessionID string `json:"sessionId"`
+	SessionID     string                 `json:"sessionId"`
+	ConfigOptions []SessionConfigOption  `json:"configOptions,omitempty"`
+	Modes         *SessionModeState      `json:"modes,omitempty"`
+	Meta          json.RawMessage        `json:"_meta,omitempty"` // Opaque passthrough for agent-specific data
+}
+
+// SessionConfigOption represents a session configuration option.
+type SessionConfigOption struct {
+	ID          string                     `json:"id"`
+	Label       string                     `json:"label"`
+	Description string                     `json:"description,omitempty"`
+	Values      []SessionConfigOptionValue `json:"values"`
+	CurrentID   string                     `json:"currentId"`
+}
+
+// SessionConfigOptionValue represents a value for a session config option.
+type SessionConfigOptionValue struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// SessionModeState represents the current mode state for a session.
+type SessionModeState struct {
+	AvailableModes []SessionMode `json:"availableModes"`
+	CurrentID      string        `json:"currentId"`
+}
+
+// SessionMode represents an available session mode.
+type SessionMode struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 // ContentBlock represents a content block in ACP protocol.
 // Per ACP spec, this follows the same structure as MCP ContentBlock.
+// https://agentclientprotocol.com/protocol/content
 type ContentBlock struct {
-	Type string `json:"type"`          // "text", "image", "audio", "resource", "resource_link"
-	Text string `json:"text,omitempty"` // For type="text"
-	// Additional fields for other content types can be added as needed
+	Type string `json:"type"` // "text", "image", "audio", "resource", "resource_link"
+
+	// For type="text"
+	Text string `json:"text,omitempty"`
+
+	// For type="image"
+	MimeType string `json:"mimeType,omitempty"`
+	Data     string `json:"data,omitempty"` // base64 encoded
+
+	// For type="resource"
+	Resource *EmbeddedResource `json:"resource,omitempty"`
+
+	// For type="resource_link"
+	URI         string `json:"uri,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Size        *int64 `json:"size,omitempty"`
+
+	// Common optional field
+	Annotations *Annotations `json:"annotations,omitempty"`
+}
+
+// EmbeddedResource represents a resource embedded in a content block.
+type EmbeddedResource struct {
+	URI      string `json:"uri"`
+	MimeType string `json:"mimeType,omitempty"`
+	// Text resource
+	Text string `json:"text,omitempty"`
+	// Blob resource (base64 encoded)
+	Blob string `json:"blob,omitempty"`
+}
+
+// Annotations provides optional metadata about how content should be used or displayed.
+type Annotations struct {
+	Audience     []string `json:"audience,omitempty"`
+	Priority     *float64 `json:"priority,omitempty"`
+	LastModified string   `json:"lastModified,omitempty"`
 }
 
 // TextContent creates a text content block from a string.
@@ -215,24 +470,39 @@ func TextContent(text string) ContentBlock {
 	return ContentBlock{Type: "text", Text: text}
 }
 
-// SessionPromptParams represents the parameters for session/prompt.
-type SessionPromptParams struct {
-	SessionID string             `json:"sessionId"`
-	Prompt    []ContentBlock     `json:"prompt"`           // Array of content blocks per ACP spec
-	Context   []PromptContextRef `json:"context,omitempty"`
-	Tools     []string           `json:"tools,omitempty"`
+// ResourceLinkContent creates a resource_link content block.
+func ResourceLinkContent(uri, name, mimeType string) ContentBlock {
+	return ContentBlock{
+		Type:     "resource_link",
+		URI:      uri,
+		Name:     name,
+		MimeType: mimeType,
+	}
 }
 
-// PromptContextRef represents a context reference in a session/prompt request.
-// It allows the agent to access specific files or resources as context.
-type PromptContextRef struct {
-	Path string `json:"path"` // Absolute path to the file
-	Kind string `json:"kind"` // Type of context: "file" for now
+// EmbeddedResourceContent creates a resource content block with embedded text.
+func EmbeddedResourceContent(uri, mimeType, text string) ContentBlock {
+	return ContentBlock{
+		Type: "resource",
+		Resource: &EmbeddedResource{
+			URI:      uri,
+			MimeType: mimeType,
+			Text:     text,
+		},
+	}
+}
+
+// SessionPromptParams represents the parameters for session/prompt.
+// Per ACP spec: https://agentclientprotocol.com/protocol/prompt-turn#1-user-message
+type SessionPromptParams struct {
+	SessionID string         `json:"sessionId"`
+	Prompt    []ContentBlock `json:"prompt"` // Array of content blocks per ACP spec
 }
 
 // SessionPromptResult represents the result of session/prompt.
+// Per ACP spec: https://agentclientprotocol.com/protocol/prompt-turn#4-check-for-completion
 type SessionPromptResult struct {
-	Success bool `json:"success"`
+	StopReason StopReason `json:"stopReason"`
 }
 
 // SessionCancelParams represents the parameters for session/cancel.
@@ -240,19 +510,80 @@ type SessionCancelParams struct {
 	SessionID string `json:"sessionId"`
 }
 
-// PermissionRequest represents a tool-call permission request.
-type PermissionRequest struct {
-	SessionID  string          `json:"sessionId"`
-	RequestID  string          `json:"requestId"`
-	Tool       string          `json:"tool"`
-	Parameters json.RawMessage `json:"parameters"`
+// RequestPermissionParams represents the parameters for session/request_permission.
+// Per ACP spec: https://agentclientprotocol.com/protocol/tool-calls#requesting-permission
+type RequestPermissionParams struct {
+	SessionID string             `json:"sessionId"`
+	ToolCall  ToolCallUpdate     `json:"toolCall"`
+	Options   []PermissionOption `json:"options"`
+	Meta      json.RawMessage    `json:"_meta,omitempty"` // Opaque passthrough for agent-specific data
 }
 
-// PermissionResponse represents the response to a permission request.
-type PermissionResponse struct {
-	RequestID string `json:"requestId"`
-	Granted   bool   `json:"granted"`
-	Reason    string `json:"reason,omitempty"`
+// ToolCallUpdate represents a tool call update notification.
+// Per ACP spec: https://agentclientprotocol.com/protocol/tool-calls
+type ToolCallUpdate struct {
+	ToolCallID string               `json:"toolCallId"`
+	Title      string               `json:"title,omitempty"`
+	Kind       string               `json:"kind,omitempty"` // read, edit, delete, move, search, execute, think, fetch, other
+	Status     ToolCallStatus       `json:"status,omitempty"`
+	Content    []ToolCallContent    `json:"content,omitempty"`
+	Locations  []ToolCallLocation   `json:"locations,omitempty"`
+	RawInput   json.RawMessage      `json:"rawInput,omitempty"`
+	RawOutput  json.RawMessage      `json:"rawOutput,omitempty"`
+	Meta       json.RawMessage      `json:"_meta,omitempty"` // Opaque passthrough for agent-specific data
+}
+
+// ToolCallContent represents content produced by a tool call.
+type ToolCallContent struct {
+	Type string `json:"type"` // "content", "diff", "terminal"
+
+	// For type="content"
+	Content *ContentBlock `json:"content,omitempty"`
+
+	// For type="diff"
+	Path    string `json:"path,omitempty"`
+	OldText string `json:"oldText,omitempty"`
+	NewText string `json:"newText,omitempty"`
+
+	// For type="terminal"
+	TerminalID string `json:"terminalId,omitempty"`
+}
+
+// ToolCallLocation represents a file location affected by a tool call.
+type ToolCallLocation struct {
+	Path string `json:"path"`
+	Line *int   `json:"line,omitempty"`
+}
+
+// PermissionOption represents an available permission choice.
+// Per ACP spec: https://agentclientprotocol.com/protocol/tool-calls#permission-options
+type PermissionOption struct {
+	OptionID string               `json:"optionId"`
+	Name     string               `json:"name"`
+	Kind     PermissionOptionKind `json:"kind"`
+}
+
+// RequestPermissionResult represents the response to a permission request.
+// Per ACP spec: https://agentclientprotocol.com/protocol/tool-calls#requesting-permission
+type RequestPermissionResult struct {
+	Outcome RequestPermissionOutcome `json:"outcome"`
+}
+
+// RequestPermissionOutcome represents the user's decision on a permission request.
+// This is a discriminated union: either "cancelled" or {outcome: "selected", optionId: string}
+type RequestPermissionOutcome struct {
+	Outcome  string `json:"outcome"` // "cancelled" or "selected"
+	OptionID string `json:"optionId,omitempty"`
+}
+
+// CancelledOutcome returns a cancelled permission outcome.
+func CancelledOutcome() RequestPermissionOutcome {
+	return RequestPermissionOutcome{Outcome: "cancelled"}
+}
+
+// SelectedOutcome returns a selected permission outcome.
+func SelectedOutcome(optionID string) RequestPermissionOutcome {
+	return RequestPermissionOutcome{Outcome: "selected", OptionID: optionID}
 }
 
 // NewRequest creates a new JSON-RPC 2.0 request message.

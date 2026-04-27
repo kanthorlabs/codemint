@@ -19,6 +19,10 @@ func TestEventKind_String(t *testing.T) {
 		{EventPermissionRequest, "permission_request"},
 		{EventTurnStart, "turn_start"},
 		{EventTurnEnd, "turn_end"},
+		{EventSessionInfo, "session_info"},
+		{EventAvailableCommands, "available_commands"},
+		{EventCurrentMode, "current_mode"},
+		{EventConfigOption, "config_option"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
@@ -136,14 +140,15 @@ func TestClassify(t *testing.T) {
 				JSONRPC: JSONRPCVersion,
 				ID:      json.RawMessage(`1`),
 				Method:  MethodRequestPermission,
-				Params:  json.RawMessage(`{"sessionId":"sess-perm","requestId":"req-001","tool":"bash","parameters":{"command":"rm -rf /tmp","cwd":"/home"}}`),
+				// Per ACP spec: RequestPermissionParams has sessionId, toolCall (ToolCallUpdate), options
+				Params:  json.RawMessage(`{"sessionId":"sess-perm","toolCall":{"toolCallId":"call-001","title":"bash","rawInput":{"command":"rm -rf /tmp","cwd":"/home"}},"options":[{"optionId":"allow_once","name":"Allow","kind":"allow_once"}]}`),
 			},
 			wantKind:     EventPermissionRequest,
 			wantSession:  "sess-perm",
-			wantToolName: "bash",
-			wantCommand:  "rm -rf /tmp",
+			wantToolName: "bash",      // from toolCall.title
+			wantCommand:  "rm -rf /tmp", // from toolCall.rawInput
 			wantCwd:      "/home",
-			wantReqID:    "req-001",
+			wantReqID:    "call-001",  // from toolCall.toolCallId
 		},
 		{
 			name: "turn_start",
@@ -164,6 +169,46 @@ func TestClassify(t *testing.T) {
 			},
 			wantKind:    EventTurnEnd,
 			wantSession: "sess-turn",
+		},
+		{
+			name: "session_info_update",
+			msg: Message{
+				JSONRPC: JSONRPCVersion,
+				Method:  MethodSessionUpdate,
+				Params:  json.RawMessage(`{"sessionId":"sess-info","update":{"sessionUpdate":"session_info_update","configOptions":[]}}`),
+			},
+			wantKind:    EventSessionInfo,
+			wantSession: "sess-info",
+		},
+		{
+			name: "available_commands_update",
+			msg: Message{
+				JSONRPC: JSONRPCVersion,
+				Method:  MethodSessionUpdate,
+				Params:  json.RawMessage(`{"sessionId":"sess-cmd","update":{"sessionUpdate":"available_commands_update","commands":[{"name":"/help"}]}}`),
+			},
+			wantKind:    EventAvailableCommands,
+			wantSession: "sess-cmd",
+		},
+		{
+			name: "current_mode_update",
+			msg: Message{
+				JSONRPC: JSONRPCVersion,
+				Method:  MethodSessionUpdate,
+				Params:  json.RawMessage(`{"sessionId":"sess-mode","update":{"sessionUpdate":"current_mode_update","modeId":"code"}}`),
+			},
+			wantKind:    EventCurrentMode,
+			wantSession: "sess-mode",
+		},
+		{
+			name: "config_option_update",
+			msg: Message{
+				JSONRPC: JSONRPCVersion,
+				Method:  MethodSessionUpdate,
+				Params:  json.RawMessage(`{"sessionId":"sess-cfg","update":{"sessionUpdate":"config_option_update","optionId":"model","valueId":"gpt-4"}}`),
+			},
+			wantKind:    EventConfigOption,
+			wantSession: "sess-cfg",
 		},
 		{
 			name: "unknown_method",

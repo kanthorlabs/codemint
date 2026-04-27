@@ -304,15 +304,15 @@ func (i *Interceptor) executeAndRespondPermission(ctx context.Context, ev acp.Ev
 }
 
 // respondPermissionGranted sends a positive permission response to the ACP agent.
+// Per ACP spec, the response uses {outcome: {outcome: "selected", optionId: "..."}}
 func (i *Interceptor) respondPermissionGranted(ctx context.Context, ev acp.Event, result RunResult) {
 	if i.worker == nil {
 		return
 	}
 
-	resp := acp.PermissionResponse{
-		RequestID: ev.RequestID,
-		Granted:   true,
-		Reason:    fmt.Sprintf("auto-approved (exit=%d, duration=%s)", result.ExitCode, result.Duration),
+	// Per ACP spec, permission response uses outcome with selected optionId
+	resp := acp.RequestPermissionResult{
+		Outcome: acp.SelectedOutcome(ApprovalOptionAllowOnce),
 	}
 
 	msg, err := acp.NewResponse(nil, resp)
@@ -334,15 +334,15 @@ func (i *Interceptor) respondPermissionGranted(ctx context.Context, ev acp.Event
 }
 
 // respondPermissionDenied sends a negative permission response to the ACP agent.
+// Per ACP spec, the response uses {outcome: {outcome: "selected", optionId: "reject_once"}}
 func (i *Interceptor) respondPermissionDenied(ctx context.Context, ev acp.Event, reason string) {
 	if i.worker == nil {
 		return
 	}
 
-	resp := acp.PermissionResponse{
-		RequestID: ev.RequestID,
-		Granted:   false,
-		Reason:    reason,
+	// Per ACP spec, permission response uses outcome with selected optionId
+	resp := acp.RequestPermissionResult{
+		Outcome: acp.SelectedOutcome(ApprovalOptionDeny),
 	}
 
 	msg, err := acp.NewResponse(nil, resp)

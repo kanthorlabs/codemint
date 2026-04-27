@@ -30,6 +30,14 @@ const (
 	EventTurnStart
 	// EventTurnEnd represents turn end events.
 	EventTurnEnd
+	// EventSessionInfo represents session_info_update events.
+	EventSessionInfo
+	// EventAvailableCommands represents available_commands_update events.
+	EventAvailableCommands
+	// EventCurrentMode represents current_mode_update events.
+	EventCurrentMode
+	// EventConfigOption represents config_option_update events.
+	EventConfigOption
 )
 
 // String returns a human-readable name for the event kind.
@@ -51,6 +59,14 @@ func (k EventKind) String() string {
 		return "turn_start"
 	case EventTurnEnd:
 		return "turn_end"
+	case EventSessionInfo:
+		return "session_info"
+	case EventAvailableCommands:
+		return "available_commands"
+	case EventCurrentMode:
+		return "current_mode"
+	case EventConfigOption:
+		return "config_option"
 	default:
 		return "unknown"
 	}
@@ -132,9 +148,20 @@ func Classify(msg Message) Event {
 	case UpdateKindToolCallUpdate:
 		ev.Kind = EventToolUpdate
 		extractToolCallInfo(&ev, update.Update.Raw)
+	case UpdateKindTurnStart:
+		ev.Kind = EventTurnStart
+	case UpdateKindTurnEnd:
+		ev.Kind = EventTurnEnd
+	case UpdateKindSessionInfoUpdate:
+		ev.Kind = EventSessionInfo
+	case UpdateKindAvailableCommandsUpdate:
+		ev.Kind = EventAvailableCommands
+	case UpdateKindCurrentModeUpdate:
+		ev.Kind = EventCurrentMode
+	case UpdateKindConfigOptionUpdate:
+		ev.Kind = EventConfigOption
 	default:
-		// Check for turn events or other known patterns
-		ev.Kind = classifyByPattern(update.Update.Kind)
+		ev.Kind = EventUnknown
 	}
 
 	return ev
@@ -144,18 +171,20 @@ func Classify(msg Message) Event {
 func classifyPermissionRequest(msg Message, ev Event) Event {
 	ev.Kind = EventPermissionRequest
 
-	var req PermissionRequest
+	var req RequestPermissionParams
 	if err := msg.ParseParams(&req); err != nil {
 		return ev
 	}
 
 	ev.ACPSessionID = req.SessionID
-	ev.RequestID = req.RequestID
-	ev.ToolName = req.Tool
-	ev.ToolArgs = req.Parameters
+	ev.RequestID = req.ToolCall.ToolCallID
+	ev.ToolName = req.ToolCall.Title // Use title as a display name
 
-	// Extract shell command info if applicable
-	extractShellCommand(&ev, req.Parameters)
+	// Extract tool parameters from rawInput if available
+	if len(req.ToolCall.RawInput) > 0 {
+		ev.ToolArgs = req.ToolCall.RawInput
+		extractShellCommand(&ev, req.ToolCall.RawInput)
+	}
 
 	return ev
 }
@@ -206,18 +235,6 @@ func isShellTool(name string) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-// classifyByPattern attempts to classify events by common pattern matching.
-func classifyByPattern(kind string) EventKind {
-	switch kind {
-	case "turn_start":
-		return EventTurnStart
-	case "turn_end":
-		return EventTurnEnd
-	default:
-		return EventUnknown
 	}
 }
 

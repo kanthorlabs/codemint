@@ -20,6 +20,36 @@ var builtinProviders = map[string]*Provider{
 		VersionArgs:          []string{"--version"},
 		ModelFlag:            "--model",
 	},
+	"codex": {
+		Name:        "codex",
+		DisplayName: "OpenAI Codex CLI",
+		Command:     "codex",
+		Args:        []string{"--agent"},
+		Capabilities: ProviderCaps{
+			Streaming:    true,
+			ToolCalls:    true,
+			Planning:     false, // Codex CLI isn't planning-aware yet
+			ContextReset: true,
+		},
+		SystemPromptStrategy: PromptStrategyFlag,
+		VersionArgs:          []string{"--version"},
+		ModelFlag:            "--model",
+	},
+	"claude-code": {
+		Name:        "claude-code",
+		DisplayName: "Claude Code",
+		Command:     "claude",
+		Args:        []string{"--agent"},
+		Capabilities: ProviderCaps{
+			Streaming:    true,
+			ToolCalls:    true,
+			Planning:     true,
+			ContextReset: true,
+		},
+		SystemPromptStrategy: PromptStrategyStdin,
+		VersionArgs:          []string{"--version"},
+		ModelFlag:            "--model",
+	},
 }
 
 // DefaultProviderName is the name of the default provider.
