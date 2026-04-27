@@ -175,8 +175,6 @@ func run() error {
 	} else if workflowFileReg.Len() > 0 {
 		log.Printf("Loaded %d workflow file(s): %v", workflowFileReg.Len(), workflowFileReg.Names())
 	}
-	// Note: workflowFileReg will be passed to command registration in Story 2.0.4
-	_ = workflowFileReg // Suppress unused warning until Story 2.0.4
 
 	// Step 9c: Create Provider Registry (Story 3.22).
 	// This merges builtin catalog with config overrides.
@@ -390,6 +388,28 @@ func run() error {
 	}
 	if err := repl.RegisterProviderCommands(cmdRegistry, providerCmdDeps); err != nil {
 		return fmt.Errorf("register provider commands: %w", err)
+	}
+
+	// Register workflow commands (Story 2.0.4).
+	// Look up human agent ID for task assignment.
+	var humanAgentID, assistantAgentID string
+	humanAgent, _ := agentRepo.FindByName(ctx, "human")
+	if humanAgent != nil {
+		humanAgentID = humanAgent.ID
+	}
+	// Note: assistantAgentID would be set when we have a configured assistant agent.
+	// For now, tasks will use the default assignee from GenerateConfig.
+
+	taskGenerator := workflow.NewTaskGenerator(humanAgentID, assistantAgentID, acpRuntime.YoloAgentID)
+	workflowCmdDeps := &repl.WorkflowCommandDeps{
+		FileRegistry:  workflowFileReg,
+		TaskGenerator: taskGenerator,
+		TaskRepo:      taskRepo,
+		WorkflowRepo:  workflowRepo,
+		ActiveSession: activeSession,
+	}
+	if err := repl.RegisterWorkflowCommands(cmdRegistry, workflowCmdDeps); err != nil {
+		return fmt.Errorf("register workflow commands: %w", err)
 	}
 
 	// Step 12: Start heartbeat goroutine if we have an active session.
