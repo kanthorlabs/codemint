@@ -13,3 +13,7 @@ TODO:
 ## Coding Convention
 
 - ID pattern: <entity-id>-<uuid-v7>. For example, `task-123e4567-e89b-12d3-a456-426614174000`, `session-123e4567-e89b-12d3-a456-426614174000`, `project-123e4567-e89b-12d3-a456-426614174000`.
+
+## Agent Notes
+
+- Always find relevant tests of the code you are working on, and run them to ensure your changes do not break existing functionality.

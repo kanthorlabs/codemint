@@ -3,39 +3,251 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestWorker_Echo(t *testing.T) {
-	// Create a mock ACP server script that echoes requests back as responses
-	dir := t.TempDir()
-	script := filepath.Join(dir, "mock_acp.sh")
+// mockACPScript provides a builder for creating mock ACP server bash scripts.
+// It handles the common patterns needed for testing Worker functionality.
+type mockACPScript struct {
+	// capabilities configures the initialize response
+	capabilities struct {
+		streaming bool
+		toolCalls bool
+	}
+	// sessionID is returned by session/new response
+	sessionID string
+	// afterHandshake specifies what to do after init + session/new
+	afterHandshake afterHandshakeBehavior
+	// signalHandler configures trap for SIGTERM
+	signalHandler signalHandlerType
+	// notifications to send after handshake
+	notifications []string
+	// notificationDelay before sending notifications
+	notificationDelay time.Duration
+	// echoRequests echoes back any request with an ID
+	echoRequests bool
+	// useMethodLoop indicates whether to use a method handling loop
+	useMethodLoop bool
+	// handleMethods specifies which methods to handle in a loop
+	handleMethods []string
+}
 
-	// Mock script that:
-	// 1. Reads JSON lines from stdin
-	// 2. For initialize: returns a response with capabilities
-	// 3. For other requests: echoes them back
-	mockScript := `#!/bin/bash
-while IFS= read -r line; do
-    method=$(echo "$line" | grep -o '"method":"[^"]*"' | cut -d'"' -f4)
-    id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
-    
-    if [ "$method" = "initialize" ]; then
-        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{\"streaming\":true,\"toolCalls\":true}}}"
-    elif [ -n "$id" ] && [ "$id" != "null" ]; then
-        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"echo\":true}}"
-    fi
-done
-`
-	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
-		t.Fatalf("write mock script: %v", err)
+type afterHandshakeBehavior int
+
+const (
+	// afterHandshakeWait reads stdin forever (default)
+	afterHandshakeWait afterHandshakeBehavior = iota
+	// afterHandshakeExit exits immediately
+	afterHandshakeExit
+	// afterHandshakeSleep sleeps forever
+	afterHandshakeSleep
+	// afterHandshakeNone does nothing (for custom loop handling)
+	afterHandshakeNone
+)
+
+type signalHandlerType int
+
+const (
+	// signalHandlerNone - no signal handling (default)
+	signalHandlerNone signalHandlerType = iota
+	// signalHandlerExitOnSIGTERM - exit 0 on SIGTERM
+	signalHandlerExitOnSIGTERM
+	// signalHandlerIgnoreSIGTERM - ignore SIGTERM
+	signalHandlerIgnoreSIGTERM
+)
+
+// newMockACPScript creates a new mock script builder with default settings.
+func newMockACPScript() *mockACPScript {
+	return &mockACPScript{
+		sessionID:      "test-session",
+		afterHandshake: afterHandshakeWait,
+	}
+}
+
+// withCapabilities sets the capabilities in the initialize response.
+func (m *mockACPScript) withCapabilities(streaming, toolCalls bool) *mockACPScript {
+	m.capabilities.streaming = streaming
+	m.capabilities.toolCalls = toolCalls
+	return m
+}
+
+// withSessionID sets the session ID returned by session/new.
+func (m *mockACPScript) withSessionID(id string) *mockACPScript {
+	m.sessionID = id
+	return m
+}
+
+// withAfterHandshake sets what happens after the handshake completes.
+func (m *mockACPScript) withAfterHandshake(behavior afterHandshakeBehavior) *mockACPScript {
+	m.afterHandshake = behavior
+	return m
+}
+
+// withSignalHandler sets the signal handling behavior.
+func (m *mockACPScript) withSignalHandler(handler signalHandlerType) *mockACPScript {
+	m.signalHandler = handler
+	return m
+}
+
+// withNotifications adds notifications to send after handshake.
+func (m *mockACPScript) withNotifications(delay time.Duration, notifications ...string) *mockACPScript {
+	m.notificationDelay = delay
+	m.notifications = notifications
+	return m
+}
+
+// withEchoRequests enables echoing back any request with an ID.
+func (m *mockACPScript) withEchoRequests() *mockACPScript {
+	m.echoRequests = true
+	return m
+}
+
+// withMethodHandlers sets up a loop that handles specific methods.
+func (m *mockACPScript) withMethodHandlers(methods ...string) *mockACPScript {
+	m.useMethodLoop = true
+	m.handleMethods = methods
+	m.afterHandshake = afterHandshakeNone
+	return m
+}
+
+// build generates the bash script content.
+func (m *mockACPScript) build() string {
+	var sb strings.Builder
+
+	sb.WriteString("#!/bin/bash\n")
+
+	// Signal handler (must be at the top)
+	switch m.signalHandler {
+	case signalHandlerExitOnSIGTERM:
+		sb.WriteString("trap 'exit 0' SIGTERM\n")
+	case signalHandlerIgnoreSIGTERM:
+		sb.WriteString("trap '' SIGTERM\n")
+	}
+	sb.WriteString("\n")
+
+	// If using method handlers loop, use that pattern
+	if m.useMethodLoop || m.echoRequests {
+		m.buildMethodLoop(&sb)
+		return sb.String()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	// Standard sequential pattern: initialize + session/new
+	m.buildHandshake(&sb)
+
+	// Notifications
+	if len(m.notifications) > 0 {
+		if m.notificationDelay > 0 {
+			sb.WriteString(fmt.Sprintf("sleep %.1f\n", m.notificationDelay.Seconds()))
+		}
+		for _, notif := range m.notifications {
+			sb.WriteString(fmt.Sprintf("echo '%s'\n", notif))
+		}
+	}
+
+	// After handshake behavior
+	switch m.afterHandshake {
+	case afterHandshakeWait:
+		sb.WriteString("while read line; do :; done\n")
+	case afterHandshakeExit:
+		// Script ends, process exits
+	case afterHandshakeSleep:
+		sb.WriteString("while true; do sleep 1; done\n")
+	}
+
+	return sb.String()
+}
+
+// buildHandshake writes the standard initialize + session/new handshake.
+func (m *mockACPScript) buildHandshake(sb *strings.Builder) {
+	// Initialize response
+	sb.WriteString("read line\n")
+	sb.WriteString("id=$(echo \"$line\" | grep -o '\"id\":[0-9]*' | cut -d':' -f2)\n")
+	capsJSON := m.capabilitiesJSON()
+	sb.WriteString(fmt.Sprintf("echo \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":{\\\"serverInfo\\\":{\\\"name\\\":\\\"mock\\\",\\\"version\\\":\\\"1.0.0\\\"},\\\"capabilities\\\":%s}}\"\n", capsJSON))
+	sb.WriteString("\n")
+
+	// Session/new response
+	sb.WriteString("read line\n")
+	sb.WriteString("id=$(echo \"$line\" | grep -o '\"id\":[0-9]*' | cut -d':' -f2)\n")
+	sb.WriteString(fmt.Sprintf("echo \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":{\\\"sessionId\\\":\\\"%s\\\"}}\"\n", m.sessionID))
+	sb.WriteString("\n")
+}
+
+// buildMethodLoop writes a loop that handles methods by name.
+func (m *mockACPScript) buildMethodLoop(sb *strings.Builder) {
+	sb.WriteString("while IFS= read -r line; do\n")
+	sb.WriteString("    method=$(echo \"$line\" | grep -o '\"method\":\"[^\"]*\"' | cut -d'\"' -f4)\n")
+	sb.WriteString("    id=$(echo \"$line\" | grep -o '\"id\":[0-9]*' | cut -d':' -f2)\n")
+	sb.WriteString("    \n")
+
+	// Always handle initialize
+	capsJSON := m.capabilitiesJSON()
+	sb.WriteString("    if [ \"$method\" = \"initialize\" ]; then\n")
+	sb.WriteString(fmt.Sprintf("        echo \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":{\\\"serverInfo\\\":{\\\"name\\\":\\\"mock\\\",\\\"version\\\":\\\"1.0.0\\\"},\\\"capabilities\\\":%s}}\"\n", capsJSON))
+
+	// Always handle session/new
+	sb.WriteString("    elif [ \"$method\" = \"session/new\" ]; then\n")
+	if m.sessionID != "" && !strings.Contains(m.sessionID, "$") {
+		sb.WriteString(fmt.Sprintf("        echo \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":{\\\"sessionId\\\":\\\"%s\\\"}}\"\n", m.sessionID))
+	} else {
+		// Dynamic session ID
+		sb.WriteString("        echo \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":{\\\"sessionId\\\":\\\"new-session-$(date +%s%N)\\\"}}\"\n")
+	}
+
+	// Handle additional methods
+	for _, method := range m.handleMethods {
+		if method == "initialize" || method == "session/new" {
+			continue // Already handled
+		}
+		sb.WriteString(fmt.Sprintf("    elif [ \"$method\" = \"%s\" ]; then\n", method))
+		sb.WriteString("        echo \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":{}}\"\n")
+	}
+
+	// Echo any other request with an ID
+	if m.echoRequests {
+		sb.WriteString("    elif [ -n \"$id\" ] && [ \"$id\" != \"null\" ]; then\n")
+		sb.WriteString("        echo \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":{\\\"echo\\\":true}}\"\n")
+	}
+
+	sb.WriteString("    fi\n")
+	sb.WriteString("done\n")
+}
+
+// capabilitiesJSON returns the capabilities as a JSON object string.
+func (m *mockACPScript) capabilitiesJSON() string {
+	if !m.capabilities.streaming && !m.capabilities.toolCalls {
+		return "{}"
+	}
+	parts := []string{}
+	if m.capabilities.streaming {
+		parts = append(parts, "\\\"streaming\\\":true")
+	}
+	if m.capabilities.toolCalls {
+		parts = append(parts, "\\\"toolCalls\\\":true")
+	}
+	return "{" + strings.Join(parts, ",") + "}"
+}
+
+// writeTo writes the script to a file and returns the path.
+func (m *mockACPScript) writeTo(t *testing.T, dir string) string {
+	t.Helper()
+	script := filepath.Join(dir, "mock_acp.sh")
+	if err := os.WriteFile(script, []byte(m.build()), 0755); err != nil {
+		t.Fatalf("write mock script: %v", err)
+	}
+	return script
+}
+
+// spawnWorker creates a worker using this mock script.
+func (m *mockACPScript) spawnWorker(t *testing.T, ctx context.Context) (*Worker, string) {
+	t.Helper()
+	dir := t.TempDir()
+	script := m.writeTo(t, dir)
 
 	cfg := WorkerConfig{
 		Command:          "/bin/bash",
@@ -48,6 +260,19 @@ done
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
+	return worker, dir
+}
+
+// --- Tests ---
+
+func TestWorker_Echo(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	worker, _ := newMockACPScript().
+		withCapabilities(true, true).
+		withEchoRequests().
+		spawnWorker(t, ctx)
 	defer worker.Stop()
 
 	// Verify capabilities were set
@@ -84,34 +309,11 @@ done
 }
 
 func TestWorker_StopClosesChannel(t *testing.T) {
-	// Create a simple script that just reads stdin forever
-	dir := t.TempDir()
-	script := filepath.Join(dir, "mock_acp.sh")
-
-	mockScript := `#!/bin/bash
-# Return initialize response
-read line
-id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
-echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
-
-# Then just wait
-while read line; do :; done
-`
-	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
-		t.Fatalf("write mock script: %v", err)
-	}
-
 	ctx := context.Background()
-	cfg := WorkerConfig{
-		Command:          "/bin/bash",
-		Args:             []string{script},
-		HandshakeTimeout: 2 * time.Second,
-	}
 
-	worker, err := Spawn(ctx, cfg)
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
+	worker, _ := newMockACPScript().
+		withAfterHandshake(afterHandshakeWait).
+		spawnWorker(t, ctx)
 
 	// Stop the worker
 	worker.Stop()
@@ -142,14 +344,10 @@ while read line; do :; done
 }
 
 func TestWorker_HandshakeTimeout(t *testing.T) {
-	// Create a script that never responds
+	// Create a script that never responds (special case - no mock builder)
 	dir := t.TempDir()
 	script := filepath.Join(dir, "slow_acp.sh")
-
-	// Script that reads but never responds
-	mockScript := `#!/bin/bash
-while read line; do :; done
-`
+	mockScript := "#!/bin/bash\nwhile read line; do :; done\n"
 	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
 		t.Fatalf("write mock script: %v", err)
 	}
@@ -158,7 +356,7 @@ while read line; do :; done
 	cfg := WorkerConfig{
 		Command:          "/bin/bash",
 		Args:             []string{script},
-		HandshakeTimeout: 100 * time.Millisecond, // Very short timeout
+		HandshakeTimeout: 100 * time.Millisecond,
 	}
 
 	_, err := Spawn(ctx, cfg)
@@ -183,30 +381,11 @@ func TestWorker_CommandNotFound(t *testing.T) {
 }
 
 func TestWorker_Pid(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "mock_acp.sh")
-
-	mockScript := `#!/bin/bash
-read line
-id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
-echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
-while read line; do :; done
-`
-	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
-		t.Fatalf("write mock script: %v", err)
-	}
-
 	ctx := context.Background()
-	cfg := WorkerConfig{
-		Command:          "/bin/bash",
-		Args:             []string{script},
-		HandshakeTimeout: 2 * time.Second,
-	}
 
-	worker, err := Spawn(ctx, cfg)
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
+	worker, _ := newMockACPScript().
+		withAfterHandshake(afterHandshakeWait).
+		spawnWorker(t, ctx)
 	defer worker.Kill()
 
 	pid := worker.Pid()
@@ -216,44 +395,23 @@ while read line; do :; done
 }
 
 func TestWorker_Notifications(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "mock_acp.sh")
-
-	// Script that sends notifications after initialize
-	mockScript := `#!/bin/bash
-read line
-id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
-echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{\"streaming\":true}}}"
-
-# Send some notifications
-sleep 0.1
-echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"test-123","update":{"sessionUpdate":"agent_message_chunk"}}}'
-echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"test-123","update":{"sessionUpdate":"agent_message_chunk"}}}'
-
-# Keep alive briefly
-sleep 0.5
-`
-	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
-		t.Fatalf("write mock script: %v", err)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cfg := WorkerConfig{
-		Command:          "/bin/bash",
-		Args:             []string{script},
-		HandshakeTimeout: 2 * time.Second,
+	notifications := []string{
+		`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"test-123","update":{"sessionUpdate":"agent_message_chunk"}}}`,
+		`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"test-123","update":{"sessionUpdate":"agent_message_chunk"}}}`,
 	}
 
-	worker, err := Spawn(ctx, cfg)
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
+	worker, _ := newMockACPScript().
+		withCapabilities(true, false).
+		withNotifications(100*time.Millisecond, notifications...).
+		withAfterHandshake(afterHandshakeSleep).
+		spawnWorker(t, ctx)
 	defer worker.Stop()
 
 	// Collect notifications
-	var notifications []Message
+	var received []Message
 	timeout := time.After(2 * time.Second)
 
 	for {
@@ -263,7 +421,7 @@ sleep 0.5
 				goto done
 			}
 			if msg.IsNotification() {
-				notifications = append(notifications, msg)
+				received = append(received, msg)
 			}
 		case <-timeout:
 			goto done
@@ -273,11 +431,11 @@ sleep 0.5
 	}
 done:
 
-	if len(notifications) < 2 {
-		t.Errorf("received %d notifications; want at least 2", len(notifications))
+	if len(received) < 2 {
+		t.Errorf("received %d notifications; want at least 2", len(received))
 	}
 
-	for _, notif := range notifications {
+	for _, notif := range received {
 		if notif.Method != MethodSessionUpdate {
 			t.Errorf("notification method = %q; want %q", notif.Method, MethodSessionUpdate)
 		}
@@ -285,30 +443,11 @@ done:
 }
 
 func TestWorker_SendToStoppedWorker(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "mock_acp.sh")
-
-	mockScript := `#!/bin/bash
-read line
-id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
-echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
-# Exit immediately after init
-`
-	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
-		t.Fatalf("write mock script: %v", err)
-	}
-
 	ctx := context.Background()
-	cfg := WorkerConfig{
-		Command:          "/bin/bash",
-		Args:             []string{script},
-		HandshakeTimeout: 2 * time.Second,
-	}
 
-	worker, err := Spawn(ctx, cfg)
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
+	worker, _ := newMockACPScript().
+		withAfterHandshake(afterHandshakeExit).
+		spawnWorker(t, ctx)
 
 	// Wait for worker to exit
 	<-worker.Done()
@@ -319,50 +458,20 @@ echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"moc
 		ID:      json.RawMessage("1"),
 		Method:  "test",
 	}
-	err = worker.Send(msg)
+	err := worker.Send(msg)
 	if err != ErrWorkerExited {
 		t.Errorf("Send to stopped worker: error = %v; want ErrWorkerExited", err)
 	}
 }
 
 func TestWorker_ResetContext(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "mock_acp.sh")
-
-	// Mock script that handles initialize, session/new, and session/cancel
-	mockScript := `#!/bin/bash
-while IFS= read -r line; do
-    method=$(echo "$line" | grep -o '"method":"[^"]*"' | cut -d'"' -f4)
-    id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
-    
-    if [ "$method" = "initialize" ]; then
-        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{\"streaming\":true}}}"
-    elif [ "$method" = "session/new" ]; then
-        # Return a new session ID
-        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"sessionId\":\"new-session-$(date +%s%N)\"}}"
-    elif [ "$method" = "session/cancel" ]; then
-        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"
-    fi
-done
-`
-	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
-		t.Fatalf("write mock script: %v", err)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cfg := WorkerConfig{
-		Command:          "/bin/bash",
-		Args:             []string{script},
-		Cwd:              dir,
-		HandshakeTimeout: 2 * time.Second,
-	}
-
-	worker, err := Spawn(ctx, cfg)
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
+	worker, _ := newMockACPScript().
+		withSessionID("dynamic").
+		withMethodHandlers("session/cancel").
+		spawnWorker(t, ctx)
 	defer worker.Stop()
 
 	// Test ResetContext with an old session ID
@@ -382,38 +491,13 @@ done
 }
 
 func TestWorker_ResetContext_EmptyOldSession(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "mock_acp.sh")
-
-	mockScript := `#!/bin/bash
-while IFS= read -r line; do
-    method=$(echo "$line" | grep -o '"method":"[^"]*"' | cut -d'"' -f4)
-    id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
-    
-    if [ "$method" = "initialize" ]; then
-        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
-    elif [ "$method" = "session/new" ]; then
-        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"sessionId\":\"fresh-session-456\"}}"
-    fi
-done
-`
-	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
-		t.Fatalf("write mock script: %v", err)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cfg := WorkerConfig{
-		Command:          "/bin/bash",
-		Args:             []string{script},
-		HandshakeTimeout: 2 * time.Second,
-	}
-
-	worker, err := Spawn(ctx, cfg)
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
+	worker, _ := newMockACPScript().
+		withSessionID("fresh-session-456").
+		withMethodHandlers().
+		spawnWorker(t, ctx)
 	defer worker.Stop()
 
 	// Test ResetContext with empty old session (no cancel should be sent)
@@ -428,71 +512,29 @@ done
 }
 
 func TestWorker_ResetContext_ClosedWorker(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "mock_acp.sh")
-
-	mockScript := `#!/bin/bash
-read line
-id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
-echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
-# Exit immediately after init
-`
-	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
-		t.Fatalf("write mock script: %v", err)
-	}
-
 	ctx := context.Background()
-	cfg := WorkerConfig{
-		Command:          "/bin/bash",
-		Args:             []string{script},
-		HandshakeTimeout: 2 * time.Second,
-	}
 
-	worker, err := Spawn(ctx, cfg)
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
+	worker, _ := newMockACPScript().
+		withAfterHandshake(afterHandshakeExit).
+		spawnWorker(t, ctx)
 
 	// Wait for worker to exit
 	<-worker.Done()
 
 	// Try to reset context
-	_, err = worker.ResetContext(ctx, "old-session")
+	_, err := worker.ResetContext(ctx, "old-session")
 	if err != ErrWorkerClosed {
 		t.Errorf("ResetContext on closed worker: error = %v; want ErrWorkerClosed", err)
 	}
 }
 
 func TestWorker_StopGraceful_ExitsOnSIGTERM(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "mock_acp.sh")
-
-	// Mock script that exits cleanly on SIGTERM
-	mockScript := `#!/bin/bash
-trap 'exit 0' SIGTERM
-
-read line
-id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
-echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
-
-# Wait forever (until signaled)
-while true; do sleep 1; done
-`
-	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
-		t.Fatalf("write mock script: %v", err)
-	}
-
 	ctx := context.Background()
-	cfg := WorkerConfig{
-		Command:          "/bin/bash",
-		Args:             []string{script},
-		HandshakeTimeout: 2 * time.Second,
-	}
 
-	worker, err := Spawn(ctx, cfg)
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
+	worker, _ := newMockACPScript().
+		withSignalHandler(signalHandlerExitOnSIGTERM).
+		withAfterHandshake(afterHandshakeSleep).
+		spawnWorker(t, ctx)
 
 	// Worker should be alive
 	if !worker.Alive() {
@@ -500,7 +542,7 @@ while true; do sleep 1; done
 	}
 
 	// Stop gracefully with short grace period
-	err = worker.StopGraceful(ctx, 1*time.Second)
+	err := worker.StopGraceful(ctx, 1*time.Second)
 	if err != nil {
 		t.Fatalf("StopGraceful: %v", err)
 	}
@@ -520,35 +562,12 @@ while true; do sleep 1; done
 }
 
 func TestWorker_StopGraceful_RequiresSIGKILL(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "mock_acp.sh")
-
-	// Mock script that ignores SIGTERM (requires SIGKILL)
-	mockScript := `#!/bin/bash
-trap '' SIGTERM  # Ignore SIGTERM
-
-read line
-id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
-echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
-
-# Wait forever (ignoring SIGTERM)
-while true; do sleep 1; done
-`
-	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
-		t.Fatalf("write mock script: %v", err)
-	}
-
 	ctx := context.Background()
-	cfg := WorkerConfig{
-		Command:          "/bin/bash",
-		Args:             []string{script},
-		HandshakeTimeout: 2 * time.Second,
-	}
 
-	worker, err := Spawn(ctx, cfg)
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
+	worker, _ := newMockACPScript().
+		withSignalHandler(signalHandlerIgnoreSIGTERM).
+		withAfterHandshake(afterHandshakeSleep).
+		spawnWorker(t, ctx)
 
 	pid := worker.Pid()
 
@@ -559,7 +578,7 @@ while true; do sleep 1; done
 
 	// Stop gracefully with short grace period (will need SIGKILL)
 	start := time.Now()
-	err = worker.StopGraceful(ctx, 500*time.Millisecond)
+	err := worker.StopGraceful(ctx, 500*time.Millisecond)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -577,8 +596,6 @@ while true; do sleep 1; done
 	}
 
 	// Verify process is actually gone
-	// Note: checking /proc or using kill -0 is platform-specific
-	// The fact that Done() is closed is sufficient verification
 	select {
 	case <-worker.Done():
 		t.Logf("Worker (pid %d) successfully terminated", pid)
@@ -588,33 +605,14 @@ while true; do sleep 1; done
 }
 
 func TestWorker_StopGraceful_Idempotent(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "mock_acp.sh")
-
-	mockScript := `#!/bin/bash
-read line
-id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
-echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
-while read line; do :; done
-`
-	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
-		t.Fatalf("write mock script: %v", err)
-	}
-
 	ctx := context.Background()
-	cfg := WorkerConfig{
-		Command:          "/bin/bash",
-		Args:             []string{script},
-		HandshakeTimeout: 2 * time.Second,
-	}
 
-	worker, err := Spawn(ctx, cfg)
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
+	worker, _ := newMockACPScript().
+		withAfterHandshake(afterHandshakeWait).
+		spawnWorker(t, ctx)
 
 	// First stop
-	err = worker.StopGraceful(ctx, 1*time.Second)
+	err := worker.StopGraceful(ctx, 1*time.Second)
 	if err != nil {
 		t.Fatalf("first StopGraceful: %v", err)
 	}
@@ -633,34 +631,15 @@ while read line; do :; done
 }
 
 func TestWorker_StopGraceful_DefaultGracePeriod(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "mock_acp.sh")
-
-	mockScript := `#!/bin/bash
-trap 'exit 0' SIGTERM
-read line
-id=$(echo "$line" | grep -o '"id":[0-9]*' | cut -d':' -f2)
-echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"serverInfo\":{\"name\":\"mock\",\"version\":\"1.0.0\"},\"capabilities\":{}}}"
-while true; do sleep 1; done
-`
-	if err := os.WriteFile(script, []byte(mockScript), 0755); err != nil {
-		t.Fatalf("write mock script: %v", err)
-	}
-
 	ctx := context.Background()
-	cfg := WorkerConfig{
-		Command:          "/bin/bash",
-		Args:             []string{script},
-		HandshakeTimeout: 2 * time.Second,
-	}
 
-	worker, err := Spawn(ctx, cfg)
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
+	worker, _ := newMockACPScript().
+		withSignalHandler(signalHandlerExitOnSIGTERM).
+		withAfterHandshake(afterHandshakeSleep).
+		spawnWorker(t, ctx)
 
 	// Pass 0 grace period - should use DefaultGracePeriod (3s)
-	err = worker.StopGraceful(ctx, 0)
+	err := worker.StopGraceful(ctx, 0)
 	if err != nil {
 		t.Fatalf("StopGraceful with 0 grace: %v", err)
 	}

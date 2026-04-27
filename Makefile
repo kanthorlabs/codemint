@@ -27,17 +27,17 @@ build-race:
 # Run tests
 .PHONY: test
 test:
-	go test ./...
+	go test ./... -timeout 120s
 
 # Run tests with race detector
 .PHONY: test-race
 test-race:
-	go test -race ./...
+	go test -race ./... -timeout 120s
 
 # Run tests with coverage
 .PHONY: test-coverage
 test-coverage:
-	go test -coverprofile=build/coverage.out ./...
+	go test -coverprofile=build/coverage.out ./... -timeout 120s
 	go tool cover -html=build/coverage.out -o build/coverage.html
 
 # Clean build artifacts
