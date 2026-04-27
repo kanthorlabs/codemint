@@ -119,6 +119,29 @@ const (
 	YoloModeOn  YoloMode = 1    // 1 - Permissive mode, allows potentially risky operations with warnings.
 )
 
+// WorkflowStatus represents the lifecycle state of a workflow execution.
+type WorkflowStatus int
+
+const (
+	WorkflowStatusActive    WorkflowStatus = iota // 0
+	WorkflowStatusCompleted                       // 1
+	WorkflowStatusCancelled                       // 2
+)
+
+// String returns a human-readable representation of the WorkflowStatus.
+func (s WorkflowStatus) String() string {
+	switch s {
+	case WorkflowStatusActive:
+		return "Active"
+	case WorkflowStatusCompleted:
+		return "Completed"
+	case WorkflowStatusCancelled:
+		return "Cancelled"
+	default:
+		return "Unknown"
+	}
+}
+
 // ProjectKind distinguishes project types for routing and permissions.
 type ProjectKind string
 
@@ -169,9 +192,15 @@ type Session struct {
 
 // Workflow groups a set of related tasks within a session.
 type Workflow struct {
-	ID        string `db:"id"`
-	SessionID string `db:"session_id"`
-	Type      int    `db:"type"`
+	ID             string         `db:"id"`
+	SessionID      string         `db:"session_id"`
+	Type           int            `db:"type"`
+	FilePath       sql.NullString `db:"file_path"`
+	CurrentEpicID  sql.NullString `db:"current_epic_id"`
+	CurrentStoryID sql.NullString `db:"current_story_id"`
+	StartedAt      sql.NullInt64  `db:"started_at"`
+	CompletedAt    sql.NullInt64  `db:"completed_at"`
+	Status         WorkflowStatus `db:"status"`
 }
 
 // DefaultTaskTimeout is the default timeout for a task in milliseconds (1 hour).
@@ -267,11 +296,13 @@ func NewSession(projectID string) *Session {
 }
 
 // NewWorkflow creates a new Workflow linked to a session.
+// Defaults to Active status with the current timestamp as started_at.
 func NewWorkflow(sessionID string, workflowType int) *Workflow {
 	return &Workflow{
 		ID:        idgen.MustNew(),
 		SessionID: sessionID,
 		Type:      workflowType,
+		Status:    WorkflowStatusActive,
 	}
 }
 

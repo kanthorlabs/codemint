@@ -120,6 +120,7 @@ func run() error {
 	taskRepo := sqlite.NewTaskRepo(dbConn)
 	sessionRepo := sqlite.NewSessionRepo(dbConn)
 	projectRepo := sqlite.NewProjectRepo(dbConn)
+	workflowRepo := sqlite.NewWorkflowRepo(dbConn)
 
 	// Step 6: Seed system agents.
 	if err := agentRepo.EnsureSystemAgents(ctx); err != nil {
@@ -360,6 +361,7 @@ func run() error {
 	// CUIAdapter is passed from AdapterSet - only set in daemon mode.
 	daemonCmdDeps := &repl.DaemonCommandDeps{
 		TaskRepo:      taskRepo,
+		WorkflowRepo:  workflowRepo,
 		ActiveSession: activeSession,
 		ACPRegistry:   acpRegistry,
 		CUIAdapter:    adapters.CUI, // nil in CLI mode, set in daemon mode
@@ -403,6 +405,7 @@ func run() error {
 	if activeSession.Session != nil && activeSession.Project != nil {
 		scheduler = orchestrator.NewSchedulerWithConfig(orchestrator.SchedulerConfig{
 			TaskRepo:      taskRepo,
+			WorkflowRepo:  workflowRepo,
 			Executor:      orchestrator.NewExecutor(nil, taskRepo, agentRepo, mediator),
 			ACPRegistry:   acpRegistry,
 			ACPRuntime:    acpRuntime,

@@ -19,6 +19,7 @@ import (
 // DaemonCommandDeps holds the dependencies needed for daemon-related commands.
 type DaemonCommandDeps struct {
 	TaskRepo      repository.TaskRepository
+	WorkflowRepo  repository.WorkflowRepository
 	ActiveSession registry.MutableSessionInfo
 	ACPRegistry   *acp.Registry
 	CUIAdapter    *ui.CUIAdapter // Set when running in daemon mode.
@@ -251,7 +252,7 @@ func extractTaskSummary(t *domain.Task) string {
 }
 
 // statusHandler handles the /status command.
-// Shows active task, worker PID, and last-status timestamp.
+// Shows active task, worker PID, workflow progress, and last-status timestamp.
 func statusHandler(deps *DaemonCommandDeps) registry.Handler {
 	return func(ctx context.Context, active registry.ActiveSessionInfo, args []string, _ string) (registry.CommandResult, error) {
 		var sb strings.Builder
@@ -285,6 +286,51 @@ func statusHandler(deps *DaemonCommandDeps) registry.Handler {
 			sb.WriteString("Worker:  n/a\n")
 		}
 
+		// Workflow progress (Story 2.0.3).
+		if deps.WorkflowRepo != nil && sessionID != "" {
+			workflow, err := deps.WorkflowRepo.GetActiveForSession(ctx, sessionID)
+			if err == nil && workflow != nil {
+				sb.WriteString("\n")
+				// Display workflow info.
+				workflowName := "unnamed"
+				if workflow.FilePath.Valid && workflow.FilePath.String != "" {
+					// Extract filename from path for display.
+					workflowName = workflow.FilePath.String
+					if idx := strings.LastIndex(workflowName, "/"); idx >= 0 {
+						workflowName = workflowName[idx+1:]
+					}
+				}
+				sb.WriteString(fmt.Sprintf("Workflow: %s (%s)\n", workflowName, workflow.Status.String()))
+
+				// Progress indicators.
+				if workflow.CurrentEpicID.Valid || workflow.CurrentStoryID.Valid {
+					epicID := "?"
+					storyID := "?"
+					if workflow.CurrentEpicID.Valid {
+						epicID = workflow.CurrentEpicID.String
+					}
+					if workflow.CurrentStoryID.Valid {
+						storyID = workflow.CurrentStoryID.String
+					}
+					sb.WriteString(fmt.Sprintf("Progress: %s / %s\n", epicID, storyID))
+				}
+
+				// Task counts for this workflow.
+				if deps.TaskRepo != nil {
+					completedCount, totalCount := countWorkflowTasks(ctx, deps.TaskRepo, sessionID, workflow.ID)
+					if totalCount > 0 {
+						sb.WriteString(fmt.Sprintf("Tasks:    %d/%d completed\n", completedCount, totalCount))
+					}
+				}
+
+				// Started timestamp.
+				if workflow.StartedAt.Valid {
+					startedAt := time.Unix(workflow.StartedAt.Int64, 0)
+					sb.WriteString(fmt.Sprintf("Started:  %s\n", startedAt.Format("2006-01-02 15:04:05")))
+				}
+			}
+		}
+
 		// Active task.
 		if deps.TaskRepo != nil && sessionID != "" {
 			nextTask, err := deps.TaskRepo.Next(ctx, sessionID)
@@ -294,9 +340,9 @@ func statusHandler(deps *DaemonCommandDeps) registry.Handler {
 					shortTaskID = shortTaskID[:8]
 				}
 				statusName := statusIndicator(nextTask.Status)
-				sb.WriteString(fmt.Sprintf("Task:    %s [%s]\n", shortTaskID, statusName))
+				sb.WriteString(fmt.Sprintf("\nTask:    %s [%s]\n", shortTaskID, statusName))
 			} else {
-				sb.WriteString("Task:    (none pending)\n")
+				sb.WriteString("\nTask:    (none pending)\n")
 			}
 		}
 
@@ -318,6 +364,26 @@ func statusHandler(deps *DaemonCommandDeps) registry.Handler {
 			Action:  registry.ActionNone,
 		}, nil
 	}
+}
+
+// countWorkflowTasks counts completed and total tasks for a workflow.
+func countWorkflowTasks(ctx context.Context, taskRepo repository.TaskRepository, sessionID, workflowID string) (completed, total int) {
+	tasks, err := taskRepo.ListBySession(ctx, sessionID)
+	if err != nil {
+		return 0, 0
+	}
+
+	for _, t := range tasks {
+		if t.WorkflowID.Valid && t.WorkflowID.String == workflowID {
+			total++
+			// Count Success, Completed as completed.
+			if t.Status == domain.TaskStatusSuccess || t.Status == domain.TaskStatusCompleted {
+				completed++
+			}
+		}
+	}
+
+	return completed, total
 }
 
 // approveHandler handles the /approve command.

@@ -5,6 +5,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -28,8 +29,13 @@ var ErrSchedulerAlreadyRunning = errors.New("scheduler: already running")
 //   - Awaiting state support: pauses when task transitions to awaiting
 //   - Exponential backoff on consecutive DB errors
 //   - Sequential execution guardrail: only one Run loop at a time
+//
+// Workflow progress tracking (Story 2.0.3):
+//   - Updates current_epic_id and current_story_id as tasks complete
+//   - Marks workflow as completed when all tasks in session are done
 type Scheduler struct {
 	taskRepo      repository.TaskRepository
+	workflowRepo  repository.WorkflowRepository
 	executor      *Executor
 	acpRegistry   *acp.Registry
 	acpRuntime    *Runtime
@@ -61,6 +67,7 @@ type Scheduler struct {
 // SchedulerConfig holds configuration for creating a new Scheduler.
 type SchedulerConfig struct {
 	TaskRepo      repository.TaskRepository
+	WorkflowRepo  repository.WorkflowRepository
 	Executor      *Executor
 	ACPRegistry   *acp.Registry
 	ACPRuntime    *Runtime
@@ -101,6 +108,7 @@ func NewSchedulerWithConfig(cfg SchedulerConfig) *Scheduler {
 
 	return &Scheduler{
 		taskRepo:      cfg.TaskRepo,
+		workflowRepo:  cfg.WorkflowRepo,
 		executor:      cfg.Executor,
 		acpRegistry:   cfg.ACPRegistry,
 		acpRuntime:    cfg.ACPRuntime,
@@ -444,7 +452,8 @@ func (s *Scheduler) Run(ctx context.Context) error {
 				s.logger.Info("scheduler: shutting down")
 				return ctx.Err()
 			case <-s.advanceCh:
-				// Task completed, loop continues to next task.
+				// Task completed, update workflow progress (Story 2.0.3).
+				s.updateWorkflowProgress(ctx, task)
 			}
 		}
 	}
@@ -491,4 +500,84 @@ func (s *Scheduler) Restart(ctx context.Context, newSession *ActiveSession) erro
 	}
 
 	return nil
+}
+
+// updateWorkflowProgress updates the workflow's current epic/story position
+// based on the completed task, and marks the workflow as completed if all tasks are done.
+// This implements Story 2.0.3 workflow execution state tracking.
+func (s *Scheduler) updateWorkflowProgress(ctx context.Context, task *domain.Task) {
+	if s.workflowRepo == nil {
+		return
+	}
+
+	// Skip if task doesn't belong to a workflow.
+	if !task.WorkflowID.Valid {
+		return
+	}
+
+	workflowID := task.WorkflowID.String
+
+	// Update the current epic/story position.
+	epicID := fmt.Sprintf("epic-%d", task.SeqEpic)
+	storyID := fmt.Sprintf("story-%d", task.SeqStory)
+
+	if err := s.workflowRepo.UpdateProgress(ctx, workflowID, epicID, storyID); err != nil {
+		s.logger.Warn("scheduler: failed to update workflow progress",
+			"workflow_id", workflowID,
+			"task_id", task.ID,
+			"error", err,
+		)
+		// Continue even if progress update fails - non-critical.
+		return
+	}
+
+	s.logger.Debug("scheduler: updated workflow progress",
+		"workflow_id", workflowID,
+		"epic_id", epicID,
+		"story_id", storyID,
+	)
+
+	// Check if all tasks in the workflow are complete.
+	s.checkWorkflowCompletion(ctx, workflowID)
+}
+
+// checkWorkflowCompletion checks if all tasks in a workflow are in terminal state
+// and marks the workflow as completed if so.
+func (s *Scheduler) checkWorkflowCompletion(ctx context.Context, workflowID string) {
+	sessionID := s.activeSession.GetSessionID()
+	if sessionID == "" {
+		return
+	}
+
+	// Get all tasks for the session that belong to this workflow.
+	// We check if there are any pending tasks remaining.
+	pendingTasks, err := s.taskRepo.ListPending(ctx, sessionID)
+	if err != nil {
+		s.logger.Warn("scheduler: failed to check workflow completion",
+			"workflow_id", workflowID,
+			"error", err,
+		)
+		return
+	}
+
+	// Check if any pending task belongs to this workflow.
+	for _, t := range pendingTasks {
+		if t.WorkflowID.Valid && t.WorkflowID.String == workflowID {
+			// Still have pending tasks in this workflow.
+			return
+		}
+	}
+
+	// No more pending tasks in this workflow - mark as completed.
+	if err := s.workflowRepo.MarkCompleted(ctx, workflowID); err != nil {
+		s.logger.Warn("scheduler: failed to mark workflow completed",
+			"workflow_id", workflowID,
+			"error", err,
+		)
+		return
+	}
+
+	s.logger.Info("scheduler: workflow completed",
+		"workflow_id", workflowID,
+	)
 }
