@@ -406,3 +406,135 @@ func TestWorkflowStatusString(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkflowRepo_LockGoal(t *testing.T) {
+	repo, _, _, sessionID, _ := setupWorkflowFixtures(t)
+	ctx := context.Background()
+
+	workflow := domain.NewWorkflow(sessionID, 0)
+	if err := repo.Create(ctx, workflow); err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	goalText := "Implement feature X with Y capabilities"
+	criteriaJSON := `["Unit tests pass","Integration tests pass","Documentation updated"]`
+
+	// Lock goal should succeed on first call.
+	if err := repo.LockGoal(ctx, workflow.ID, goalText, criteriaJSON); err != nil {
+		t.Fatalf("LockGoal returned error: %v", err)
+	}
+
+	// Verify the goal was set.
+	found, err := repo.FindByID(ctx, workflow.ID)
+	if err != nil {
+		t.Fatalf("FindByID returned error: %v", err)
+	}
+	if !found.GoalText.Valid || found.GoalText.String != goalText {
+		t.Errorf("GoalText mismatch: got %q, want %q", found.GoalText.String, goalText)
+	}
+	if !found.SuccessCriteria.Valid || found.SuccessCriteria.String != criteriaJSON {
+		t.Errorf("SuccessCriteria mismatch: got %q, want %q", found.SuccessCriteria.String, criteriaJSON)
+	}
+}
+
+func TestWorkflowRepo_LockGoal_AlreadyLocked(t *testing.T) {
+	repo, _, _, sessionID, _ := setupWorkflowFixtures(t)
+	ctx := context.Background()
+
+	workflow := domain.NewWorkflow(sessionID, 0)
+	if err := repo.Create(ctx, workflow); err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	goalText := "Initial goal"
+	criteriaJSON := `["Criterion 1"]`
+
+	// Lock goal first time.
+	if err := repo.LockGoal(ctx, workflow.ID, goalText, criteriaJSON); err != nil {
+		t.Fatalf("First LockGoal returned error: %v", err)
+	}
+
+	// Lock goal second time should fail.
+	err := repo.LockGoal(ctx, workflow.ID, "Different goal", `["Different criterion"]`)
+	if err == nil {
+		t.Fatal("LockGoal on already-locked goal should have returned error")
+	}
+	if !contains(err.Error(), "already locked") {
+		t.Errorf("error should mention 'already locked', got: %v", err)
+	}
+}
+
+func TestWorkflowRepo_LockGoal_WorkflowNotFound(t *testing.T) {
+	repo, _, _, _, _ := setupWorkflowFixtures(t)
+	ctx := context.Background()
+
+	// Lock goal on non-existent workflow should fail with "already locked" message
+	// because 0 rows affected (same logic as locked).
+	err := repo.LockGoal(ctx, idgen.MustNew(), "Goal", `["Criterion"]`)
+	if err == nil {
+		t.Fatal("LockGoal on non-existent workflow should have returned error")
+	}
+}
+
+func TestWorkflowRepo_LockChosenOption(t *testing.T) {
+	repo, _, _, sessionID, _ := setupWorkflowFixtures(t)
+	ctx := context.Background()
+
+	workflow := domain.NewWorkflow(sessionID, 0)
+	if err := repo.Create(ctx, workflow); err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	optionJSON := `{"id":"opt-1","title":"Option A","description":"Use approach A"}`
+
+	// Lock chosen option should succeed on first call.
+	if err := repo.LockChosenOption(ctx, workflow.ID, optionJSON); err != nil {
+		t.Fatalf("LockChosenOption returned error: %v", err)
+	}
+
+	// Verify the option was set.
+	found, err := repo.FindByID(ctx, workflow.ID)
+	if err != nil {
+		t.Fatalf("FindByID returned error: %v", err)
+	}
+	if !found.ChosenOption.Valid || found.ChosenOption.String != optionJSON {
+		t.Errorf("ChosenOption mismatch: got %q, want %q", found.ChosenOption.String, optionJSON)
+	}
+}
+
+func TestWorkflowRepo_LockChosenOption_AlreadyChosen(t *testing.T) {
+	repo, _, _, sessionID, _ := setupWorkflowFixtures(t)
+	ctx := context.Background()
+
+	workflow := domain.NewWorkflow(sessionID, 0)
+	if err := repo.Create(ctx, workflow); err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	optionJSON := `{"id":"opt-1","title":"Option A"}`
+
+	// Lock option first time.
+	if err := repo.LockChosenOption(ctx, workflow.ID, optionJSON); err != nil {
+		t.Fatalf("First LockChosenOption returned error: %v", err)
+	}
+
+	// Lock option second time should fail.
+	err := repo.LockChosenOption(ctx, workflow.ID, `{"id":"opt-2","title":"Option B"}`)
+	if err == nil {
+		t.Fatal("LockChosenOption on already-chosen option should have returned error")
+	}
+	if !contains(err.Error(), "already chosen") {
+		t.Errorf("error should mention 'already chosen', got: %v", err)
+	}
+}
+
+func TestWorkflowRepo_LockChosenOption_WorkflowNotFound(t *testing.T) {
+	repo, _, _, _, _ := setupWorkflowFixtures(t)
+	ctx := context.Background()
+
+	// Lock option on non-existent workflow should fail.
+	err := repo.LockChosenOption(ctx, idgen.MustNew(), `{"id":"opt-1"}`)
+	if err == nil {
+		t.Fatal("LockChosenOption on non-existent workflow should have returned error")
+	}
+}

@@ -201,6 +201,11 @@ type Workflow struct {
 	StartedAt      sql.NullInt64  `db:"started_at"`
 	CompletedAt    sql.NullInt64  `db:"completed_at"`
 	Status         WorkflowStatus `db:"status"`
+
+	// GROW alignment fields (locked once each, mutated only by /revise-goal)
+	GoalText        sql.NullString `db:"goal_text"`        // 2.2.1: one-sentence goal
+	SuccessCriteria sql.NullString `db:"success_criteria"` // 2.2.1: JSON array of testable strings
+	ChosenOption    sql.NullString `db:"chosen_option"`    // 2.3.1: JSON of the single option picked
 }
 
 // DefaultTaskTimeout is the default timeout for a task in milliseconds (1 hour).

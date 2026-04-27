@@ -50,7 +50,7 @@ func (r *workflowRepo) Create(ctx context.Context, w *domain.Workflow) error {
 // Returns nil, nil when no matching row exists.
 func (r *workflowRepo) FindByID(ctx context.Context, id string) (*domain.Workflow, error) {
 	var w domain.Workflow
-	const query = `SELECT id, session_id, type, file_path, current_epic_id, current_story_id, started_at, completed_at, status FROM workflow WHERE id = ?`
+	const query = `SELECT id, session_id, type, file_path, current_epic_id, current_story_id, started_at, completed_at, status, goal_text, success_criteria, chosen_option FROM workflow WHERE id = ?`
 	err := r.db.GetContext(ctx, &w, query, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -66,7 +66,7 @@ func (r *workflowRepo) FindByID(ctx context.Context, id string) (*domain.Workflo
 func (r *workflowRepo) GetActiveForSession(ctx context.Context, sessionID string) (*domain.Workflow, error) {
 	var w domain.Workflow
 	const query = `
-		SELECT id, session_id, type, file_path, current_epic_id, current_story_id, started_at, completed_at, status 
+		SELECT id, session_id, type, file_path, current_epic_id, current_story_id, started_at, completed_at, status, goal_text, success_criteria, chosen_option 
 		FROM workflow 
 		WHERE session_id = ? AND status = ? 
 		ORDER BY started_at DESC 
@@ -147,7 +147,7 @@ func (r *workflowRepo) MarkCancelled(ctx context.Context, id string) error {
 func (r *workflowRepo) ListByFilePath(ctx context.Context, filePath string) ([]*domain.Workflow, error) {
 	var workflows []*domain.Workflow
 	const query = `
-		SELECT id, session_id, type, file_path, current_epic_id, current_story_id, started_at, completed_at, status 
+		SELECT id, session_id, type, file_path, current_epic_id, current_story_id, started_at, completed_at, status, goal_text, success_criteria, chosen_option 
 		FROM workflow 
 		WHERE file_path = ? 
 		ORDER BY started_at DESC
@@ -163,7 +163,7 @@ func (r *workflowRepo) ListByFilePath(ctx context.Context, filePath string) ([]*
 func (r *workflowRepo) ListBySession(ctx context.Context, sessionID string) ([]*domain.Workflow, error) {
 	var workflows []*domain.Workflow
 	const query = `
-		SELECT id, session_id, type, file_path, current_epic_id, current_story_id, started_at, completed_at, status 
+		SELECT id, session_id, type, file_path, current_epic_id, current_story_id, started_at, completed_at, status, goal_text, success_criteria, chosen_option 
 		FROM workflow 
 		WHERE session_id = ? 
 		ORDER BY started_at DESC
@@ -173,4 +173,40 @@ func (r *workflowRepo) ListBySession(ctx context.Context, sessionID string) ([]*
 		return nil, fmt.Errorf("sqlite: list workflows by session %q: %w", sessionID, err)
 	}
 	return workflows, nil
+}
+
+// LockGoal writes goal_text and success_criteria for a workflow.
+// Returns an error if these fields are already set (one-shot lock semantics).
+func (r *workflowRepo) LockGoal(ctx context.Context, workflowID, goalText, criteriaJSON string) error {
+	const query = `UPDATE workflow SET goal_text = ?, success_criteria = ? WHERE id = ? AND goal_text IS NULL`
+	result, err := r.db.ExecContext(ctx, query, goalText, criteriaJSON, workflowID)
+	if err != nil {
+		return fmt.Errorf("sqlite: lock goal for workflow %q: %w", workflowID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: lock goal for workflow %q: %w", workflowID, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("goal already locked; use /revise-goal to change")
+	}
+	return nil
+}
+
+// LockChosenOption writes chosen_option for a workflow.
+// Returns an error if the field is already set (one-shot lock semantics).
+func (r *workflowRepo) LockChosenOption(ctx context.Context, workflowID, optionJSON string) error {
+	const query = `UPDATE workflow SET chosen_option = ? WHERE id = ? AND chosen_option IS NULL`
+	result, err := r.db.ExecContext(ctx, query, optionJSON, workflowID)
+	if err != nil {
+		return fmt.Errorf("sqlite: lock chosen option for workflow %q: %w", workflowID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: lock chosen option for workflow %q: %w", workflowID, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("option already chosen for this workflow")
+	}
+	return nil
 }

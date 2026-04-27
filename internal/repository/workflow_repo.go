@@ -37,4 +37,13 @@ type WorkflowRepository interface {
 
 	// ListBySession returns all workflows for a session, ordered by started_at descending.
 	ListBySession(ctx context.Context, sessionID string) ([]*domain.Workflow, error)
+
+	// LockGoal writes goal_text and success_criteria for a workflow.
+	// Returns an error if these fields are already set (one-shot lock semantics).
+	// Use /revise-goal to change after initial lock.
+	LockGoal(ctx context.Context, workflowID, goalText, criteriaJSON string) error
+
+	// LockChosenOption writes chosen_option for a workflow.
+	// Returns an error if the field is already set (one-shot lock semantics).
+	LockChosenOption(ctx context.Context, workflowID, optionJSON string) error
 }
