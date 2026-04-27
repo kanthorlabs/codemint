@@ -346,7 +346,11 @@ func TestRegistry_DeadWorkerRespawn(t *testing.T) {
 	}
 }
 
-func TestRegistry_EnvOverride(t *testing.T) {
+func TestRegistry_EnvOverride_RemovedFromRegistry(t *testing.T) {
+	// Story 3.22: CODEMINT_ACP_CMD env override is now handled by
+	// agent.ResolveSystemAssistantProvider, not acp.Registry.
+	// This test verifies that Registry no longer applies the env override.
+
 	// Save and restore env
 	oldVal := os.Getenv(EnvACPCommand)
 	defer os.Setenv(EnvACPCommand, oldVal)
@@ -360,11 +364,11 @@ func TestRegistry_EnvOverride(t *testing.T) {
 
 	registry := NewRegistry(cfg)
 
-	// Check that the config was overridden
-	if registry.cfg.Command != "/custom/command" {
-		t.Errorf("Command = %q; want %q", registry.cfg.Command, "/custom/command")
+	// Config should NOT be overridden (Story 3.22 change)
+	if registry.cfg.Command != "opencode" {
+		t.Errorf("Command = %q; want %q (env override should NOT apply in Registry)", registry.cfg.Command, "opencode")
 	}
-	if len(registry.cfg.Args) != 0 {
-		t.Errorf("Args should be reset when using env override")
+	if len(registry.cfg.Args) != 1 || registry.cfg.Args[0] != "acp" {
+		t.Errorf("Args should NOT be reset in Registry, got %v", registry.cfg.Args)
 	}
 }

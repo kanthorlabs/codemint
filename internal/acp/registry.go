@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"sync"
 	"time"
 
@@ -26,13 +25,9 @@ type Registry struct {
 }
 
 // NewRegistry creates a new worker registry with the given configuration.
+// Note: CODEMINT_ACP_CMD env override is NO LONGER applied here (Story 3.22).
+// It is now handled by agent.ResolveSystemAssistantProvider for the System Assistant only.
 func NewRegistry(cfg WorkerConfig) *Registry {
-	// Check for environment override
-	if cmd := os.Getenv(EnvACPCommand); cmd != "" {
-		cfg.Command = cmd
-		cfg.Args = nil // Reset args when using custom command
-	}
-
 	return &Registry{
 		workers: make(map[string]*Worker),
 		cfg:     cfg,

@@ -150,7 +150,7 @@ func TestAssistantSession_WithSession_Works(t *testing.T) {
 func TestACPAssistant_NewACPAssistant_RequiresAttacher(t *testing.T) {
 	_, err := NewACPAssistant(ACPAssistantConfig{
 		Attacher: nil,
-		Provider: &Provider{Name: "test", Binary: "/bin/true"},
+		Provider: &Provider{Name: "test", Command: "/bin/true"},
 	})
 	if err == nil {
 		t.Error("expected error when attacher is nil")
@@ -172,7 +172,7 @@ func TestACPAssistant_NewACPAssistant_RequiresProvider(t *testing.T) {
 func TestACPAssistant_NewACPAssistant_MissingBinary(t *testing.T) {
 	_, err := NewACPAssistant(ACPAssistantConfig{
 		Attacher: &mockAttacher{},
-		Provider: &Provider{Name: "test", Binary: "/nonexistent/binary/path"},
+		Provider: &Provider{Name: "test", Command: "/nonexistent/binary/path"},
 	})
 	if err == nil {
 		t.Error("expected error for missing binary")

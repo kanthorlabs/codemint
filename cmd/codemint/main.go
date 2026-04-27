@@ -142,6 +142,14 @@ func run() error {
 		appCfg = &appconfig.Config{}
 	}
 
+	// Register builtin provider names with config validator for provider validation.
+	appconfig.BuiltinProviderNames = agent.BuiltinProviderNames
+
+	// Validate configuration (including provider references).
+	if err := appconfig.Validate(appCfg); err != nil {
+		log.Printf("Warning: config validation failed: %v", err)
+	}
+
 	var workflowReg *workflow.WorkflowRegistry
 	if len(appCfg.Workflows) > 0 {
 		workflowReg, err = workflow.LoadFromConfig(appCfg)
@@ -151,10 +159,44 @@ func run() error {
 		log.Printf("Loaded %d workflow(s) from config", workflowReg.Len())
 	}
 
-	// Step 9b: Create ACP worker registry and Runtime early (needed for SystemAssistant).
+	// Step 9a: Create Provider Registry (Story 3.22).
+	// This merges builtin catalog with config overrides.
+	providerRegistry, err := agent.NewProviderRegistry(appCfg)
+	if err != nil {
+		return fmt.Errorf("create provider registry: %w", err)
+	}
+
+	// Step 9b: Resolve System Assistant provider.
+	// This handles CODEMINT_ACP_CMD env override for backward compatibility.
+	systemProviderName := appCfg.Assistants.System.Provider
+	systemProvider, providerErr := agent.ResolveSystemAssistantProvider(providerRegistry, systemProviderName)
+	if providerErr != nil {
+		log.Printf("Warning: failed to resolve system assistant provider %q: %v", systemProviderName, providerErr)
+		systemProvider = nil
+	} else {
+		// Check if the binary exists
+		if err := providerRegistry.MustExist(systemProvider.Name); err != nil {
+			// If env override was used, the provider is "env-override" which isn't in registry
+			// In that case, we still have a valid provider from ResolveSystemAssistantProvider
+			if systemProvider.Name != "env-override" {
+				log.Printf("Warning: %v — System Assistant will be disabled", err)
+				systemProvider = nil
+			}
+		}
+	}
+
+	// Step 9c: Create ACP worker registry with provider-based config.
 	// The registry is created lazily - workers are only spawned when needed.
+	var acpRegistry *acp.Registry
+	if systemProvider != nil {
+		acpCfg := agent.WorkerConfigFromProvider(systemProvider, "")
+		acpRegistry = acp.NewRegistry(acpCfg)
+	} else {
+		// Fallback to default config if no provider resolved
+		acpRegistry = acp.NewRegistry(acp.DefaultConfig())
+	}
+	// Step 9d: Create ACP Runtime.
 	// The Runtime wires together Pipeline, Interceptor, StatusMapper, Fanout, and BufferRegistry.
-	acpRegistry := acp.NewRegistry(acp.DefaultConfig())
 	permissionRepo := sqlite.NewProjectPermissionRepo(dbConn)
 	bufferRegistry := acp.NewBufferRegistry(acp.DefaultBufferCapacity)
 
@@ -171,21 +213,12 @@ func run() error {
 		log.Fatalf("Failed to create ACP runtime: %v", err)
 	}
 
-	// Step 9c: Create System Assistant if enabled (Story 3.19).
+	// Step 9e: Create System Assistant if enabled (Story 3.19).
 	var systemAssistant agent.SystemAssistant
-	if cfg.withAssistant {
-		// Resolve the provider from config. Default to "opencode".
-		providerName := appCfg.Assistants.System.Provider
-		if providerName == "" {
-			providerName = "opencode"
-		}
-
-		// Build the provider configuration.
-		provider := resolveProvider(providerName)
-
+	if cfg.withAssistant && systemProvider != nil {
 		sa, saErr := agent.NewACPAssistant(agent.ACPAssistantConfig{
 			Attacher: acpRuntime,
-			Provider: provider,
+			Provider: systemProvider,
 		})
 		switch {
 		case errors.Is(saErr, agent.ErrProviderBinaryMissing):
@@ -196,6 +229,8 @@ func run() error {
 			systemAssistant = sa
 			log.Printf("System Assistant ready (provider=%s)", sa.Provider().Name)
 		}
+	} else if cfg.withAssistant && systemProvider == nil {
+		log.Printf("Warning: System Assistant disabled (no valid provider)")
 	}
 
 	// Step 10: Create dispatcher with system assistant.
@@ -317,6 +352,15 @@ func run() error {
 		return fmt.Errorf("register acp commands: %w", err)
 	}
 
+	// Register provider commands (Story 3.22).
+	providerCmdDeps := &repl.ProviderCommandDeps{
+		ProviderRegistry:    providerRegistry,
+		DefaultProviderName: systemProviderName,
+	}
+	if err := repl.RegisterProviderCommands(cmdRegistry, providerCmdDeps); err != nil {
+		return fmt.Errorf("register provider commands: %w", err)
+	}
+
 	// Step 12: Start heartbeat goroutine if we have an active session.
 	if activeSession.Session != nil {
 		heartbeat := orchestrator.NewHeartbeat(sessionRepo, activeSession)
@@ -416,37 +460,5 @@ func parseClientMode(mode string) (registry.ClientMode, error) {
 		return registry.ClientModeHybrid, nil
 	default:
 		return "", fmt.Errorf("invalid mode %q: must be 'cli', 'daemon', or 'hybrid'", mode)
-	}
-}
-
-// resolveProvider maps a provider name to its configuration.
-// This is a simplified provider registry; Story 3.22 will introduce a full ProviderRegistry.
-func resolveProvider(name string) *agent.Provider {
-	switch name {
-	case "opencode":
-		return &agent.Provider{
-			Name:   "opencode",
-			Binary: "opencode",
-			Args:   []string{"acp"},
-		}
-	case "codex":
-		return &agent.Provider{
-			Name:   "codex",
-			Binary: "codex",
-			Args:   []string{"--agent"},
-		}
-	case "claude-code":
-		return &agent.Provider{
-			Name:   "claude-code",
-			Binary: "claude",
-			Args:   []string{"--agent"},
-		}
-	default:
-		// Unknown provider - use name as binary and assume ACP mode.
-		return &agent.Provider{
-			Name:   name,
-			Binary: name,
-			Args:   []string{"acp"},
-		}
 	}
 }

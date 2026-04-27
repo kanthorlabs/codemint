@@ -31,16 +31,7 @@ type ChatChunk struct {
 	Err error
 }
 
-// Provider represents an AI provider configuration.
-// This is a simplified version; Story 3.22 will introduce a full ProviderRegistry.
-type Provider struct {
-	// Name is the provider identifier (e.g., "opencode", "codex", "claude-code").
-	Name string
-	// Binary is the path to the provider's executable.
-	Binary string
-	// Args are additional arguments to pass to the binary.
-	Args []string
-}
+// Note: Provider type is now defined in provider.go with full capabilities.
 
 // AssistantSession provides the minimal session info needed by the assistant.
 // This avoids an import cycle with orchestrator.ActiveSession.
@@ -107,8 +98,8 @@ func NewACPAssistant(cfg ACPAssistantConfig) (SystemAssistant, error) {
 	}
 
 	// Check if the provider binary is available in PATH.
-	if _, err := exec.LookPath(cfg.Provider.Binary); err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrProviderBinaryMissing, cfg.Provider.Binary)
+	if _, err := exec.LookPath(cfg.Provider.Command); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrProviderBinaryMissing, cfg.Provider.Command)
 	}
 
 	logger := cfg.Logger
@@ -261,7 +252,7 @@ type nullAssistant struct {
 // NewNullAssistant creates a test assistant that returns a canned response.
 func NewNullAssistant(response string) SystemAssistant {
 	return &nullAssistant{
-		provider: &Provider{Name: "null", Binary: "/dev/null"},
+		provider: &Provider{Name: "null", Command: "/dev/null"},
 		response: response,
 	}
 }

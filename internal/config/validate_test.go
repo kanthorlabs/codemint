@@ -5,6 +5,13 @@ import (
 	"testing"
 )
 
+func init() {
+	// Set up builtin provider names for testing.
+	BuiltinProviderNames = func() []string {
+		return []string{"opencode", "codex", "claude-code"}
+	}
+}
+
 func TestValidate_ValidConfig(t *testing.T) {
 	cfg := &Config{
 		Workflows: []WorkflowConfig{
@@ -166,6 +173,182 @@ func TestValidate_AgentConfig(t *testing.T) {
 	err := Validate(cfg)
 	if err == nil {
 		t.Fatal("expected error for invalid agent config, got nil")
+	}
+
+	vErr, ok := err.(*ValidationError)
+	if !ok {
+		t.Fatalf("expected *ValidationError, got %T", err)
+	}
+
+	if len(vErr.Violations) != 2 {
+		t.Errorf("expected 2 violations, got %d: %v", len(vErr.Violations), vErr.Violations)
+	}
+}
+
+func TestValidate_UnknownProvider(t *testing.T) {
+	cfg := &Config{
+		Assistants: AssistantsConfig{
+			System: AssistantBindingConfig{
+				Provider: "unknown-provider",
+			},
+		},
+	}
+
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error for unknown provider, got nil")
+	}
+
+	vErr, ok := err.(*ValidationError)
+	if !ok {
+		t.Fatalf("expected *ValidationError, got %T", err)
+	}
+
+	if len(vErr.Violations) != 1 {
+		t.Errorf("expected 1 violation, got %d: %v", len(vErr.Violations), vErr.Violations)
+	}
+
+	if !strings.Contains(vErr.Violations[0], "unknown provider") {
+		t.Errorf("violation should mention 'unknown provider': %s", vErr.Violations[0])
+	}
+	if !strings.Contains(vErr.Violations[0], "unknown-provider") {
+		t.Errorf("violation should mention the provider name: %s", vErr.Violations[0])
+	}
+}
+
+func TestValidate_DefaultAssistantSystem(t *testing.T) {
+	// Empty assistants should be valid - defaults to opencode.
+	cfg := &Config{
+		Assistants: AssistantsConfig{
+			System: AssistantBindingConfig{
+				Provider: "", // Empty means default
+			},
+		},
+	}
+
+	err := Validate(cfg)
+	if err != nil {
+		t.Errorf("Validate returned error for empty provider (should default): %v", err)
+	}
+}
+
+func TestValidate_ProviderOverrideKnown(t *testing.T) {
+	// Using a custom provider that's declared in providers section.
+	cfg := &Config{
+		Providers: []ProviderConfig{
+			{Name: "custom-ai", Command: "/usr/bin/custom-ai"},
+		},
+		Assistants: AssistantsConfig{
+			System: AssistantBindingConfig{
+				Provider: "custom-ai",
+			},
+		},
+	}
+
+	err := Validate(cfg)
+	if err != nil {
+		t.Errorf("Validate returned error for custom provider declared in providers: %v", err)
+	}
+}
+
+func TestValidate_BuiltinProvider(t *testing.T) {
+	// Using builtin providers should be valid.
+	for _, name := range []string{"opencode", "codex", "claude-code"} {
+		cfg := &Config{
+			Assistants: AssistantsConfig{
+				System: AssistantBindingConfig{
+					Provider: name,
+				},
+			},
+		}
+
+		err := Validate(cfg)
+		if err != nil {
+			t.Errorf("Validate returned error for builtin provider %q: %v", name, err)
+		}
+	}
+}
+
+func TestValidate_DuplicateProviderNames(t *testing.T) {
+	cfg := &Config{
+		Providers: []ProviderConfig{
+			{Name: "myai", Command: "/bin/ai1"},
+			{Name: "myai", Command: "/bin/ai2"},
+		},
+	}
+
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error for duplicate provider name, got nil")
+	}
+
+	vErr, ok := err.(*ValidationError)
+	if !ok {
+		t.Fatalf("expected *ValidationError, got %T", err)
+	}
+
+	if len(vErr.Violations) != 1 {
+		t.Errorf("expected 1 violation, got %d: %v", len(vErr.Violations), vErr.Violations)
+	}
+
+	if !strings.Contains(vErr.Violations[0], "duplicate provider name") {
+		t.Errorf("violation should mention 'duplicate provider name': %s", vErr.Violations[0])
+	}
+}
+
+func TestValidate_ProviderMissingName(t *testing.T) {
+	cfg := &Config{
+		Providers: []ProviderConfig{
+			{Name: "", Command: "/bin/ai"}, // Missing name
+		},
+	}
+
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error for missing provider name, got nil")
+	}
+
+	vErr, ok := err.(*ValidationError)
+	if !ok {
+		t.Fatalf("expected *ValidationError, got %T", err)
+	}
+
+	if !strings.Contains(vErr.Violations[0], "required") {
+		t.Errorf("violation should mention 'required': %s", vErr.Violations[0])
+	}
+}
+
+func TestValidate_MultipleAssistantBindings(t *testing.T) {
+	// Test that multiple assistant bindings can reference different providers.
+	cfg := &Config{
+		Providers: []ProviderConfig{
+			{Name: "custom-brainstormer", Command: "/bin/brainstorm"},
+		},
+		Assistants: AssistantsConfig{
+			System:       AssistantBindingConfig{Provider: "opencode"},
+			Brainstormer: AssistantBindingConfig{Provider: "custom-brainstormer"},
+			Clarifier:    AssistantBindingConfig{Provider: "codex"},
+		},
+	}
+
+	err := Validate(cfg)
+	if err != nil {
+		t.Errorf("Validate returned error for valid multi-assistant config: %v", err)
+	}
+}
+
+func TestValidate_MultipleUnknownProviders(t *testing.T) {
+	// Test that multiple unknown providers are all reported.
+	cfg := &Config{
+		Assistants: AssistantsConfig{
+			System:       AssistantBindingConfig{Provider: "unknown1"},
+			Brainstormer: AssistantBindingConfig{Provider: "unknown2"},
+		},
+	}
+
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error for unknown providers, got nil")
 	}
 
 	vErr, ok := err.(*ValidationError)

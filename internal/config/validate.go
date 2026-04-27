@@ -10,6 +10,10 @@ import (
 // validate is a singleton validator instance with custom validators registered.
 var validate *validator.Validate
 
+// BuiltinProviderNames is set during initialization to provide access to the
+// builtin provider catalog. This avoids an import cycle between config and agent.
+var BuiltinProviderNames func() []string
+
 func init() {
 	validate = validator.New(validator.WithRequiredStructEnabled())
 }
@@ -54,8 +58,54 @@ func Validate(c *Config) error {
 		seenTypes[w.Type] = i
 	}
 
+	// Custom validation: check for duplicate provider names.
+	seenProviders := make(map[string]int) // name -> index in config
+	for i, p := range c.Providers {
+		if prevIdx, exists := seenProviders[p.Name]; exists {
+			violations = append(violations,
+				fmt.Sprintf("Providers[%d].Name: duplicate provider name %q (first seen at Providers[%d])", i, p.Name, prevIdx))
+		}
+		seenProviders[p.Name] = i
+	}
+
+	// Build set of known provider names (builtin + configured).
+	knownProviders := make(map[string]bool)
+	if BuiltinProviderNames != nil {
+		for _, name := range BuiltinProviderNames() {
+			knownProviders[name] = true
+		}
+	}
+	for _, p := range c.Providers {
+		knownProviders[p.Name] = true
+	}
+
+	// Custom validation: check assistant bindings reference known providers.
+	violations = append(violations, validateAssistantBinding(c.Assistants.System, "assistants.system", knownProviders)...)
+	violations = append(violations, validateAssistantBinding(c.Assistants.Brainstormer, "assistants.brainstormer", knownProviders)...)
+	violations = append(violations, validateAssistantBinding(c.Assistants.Clarifier, "assistants.clarifier", knownProviders)...)
+	violations = append(violations, validateAssistantBinding(c.Assistants.Archivist, "assistants.archivist", knownProviders)...)
+
 	if len(violations) > 0 {
 		return &ValidationError{Violations: violations}
+	}
+
+	return nil
+}
+
+// validateAssistantBinding checks that an assistant binding references a known provider.
+func validateAssistantBinding(binding AssistantBindingConfig, field string, knownProviders map[string]bool) []string {
+	// Empty provider is valid (defaults to opencode).
+	if binding.Provider == "" {
+		return nil
+	}
+
+	if !knownProviders[binding.Provider] {
+		var known []string
+		for name := range knownProviders {
+			known = append(known, name)
+		}
+		return []string{fmt.Sprintf("%s.provider: unknown provider %q (known: %s; or declare under providers:)",
+			field, binding.Provider, strings.Join(known, ", "))}
 	}
 
 	return nil
