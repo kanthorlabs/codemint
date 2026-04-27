@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"codemint.kanthorlabs.com/internal/agent"
@@ -70,9 +71,16 @@ func (d *Dispatcher) WorkflowRegistry() *workflow.WorkflowRegistry {
 //   - /command → looks up in the registry; checks SupportedModes against
 //     active.ClientMode; calls Handler(ctx, active, args, rawArgs); renders
 //     Message via UIMediator; acts on SystemAction.
-//   - natural language + IsGlobal  → delegates to systemAssistant.
-//   - natural language + !IsGlobal → placeholder for EPIC-02 Brainstormer.
+//   - natural language + CodeMint session → delegates to systemAssistant.
+//   - natural language + Coding session → placeholder for EPIC-02 Brainstormer.
 func (d *Dispatcher) Dispatch(ctx context.Context, active *ActiveSession, input string) error {
+	slog.Info("dispatcher: received input",
+		"input", input,
+		"project_id", active.GetProjectID(),
+		"project_kind", active.Project.Kind,
+		"is_codemint", active.IsCodeMintSession(),
+	)
+
 	isSlash, cmd, args, rawArgs, err := repl.ParseInput(input)
 	if err != nil {
 		return fmt.Errorf("orchestrator: parse input: %w", err)
@@ -121,33 +129,48 @@ func (d *Dispatcher) Dispatch(ctx context.Context, active *ActiveSession, input 
 		return nil
 	}
 
-	// Natural-language path.
-	if active.IsGlobal {
+	// Natural-language path: route based on project kind.
+	slog.Info("dispatcher: routing natural language",
+		"project_kind", active.Project.Kind,
+		"is_codemint", active.IsCodeMintSession(),
+		"raw_args", rawArgs,
+	)
+
+	switch {
+	case active.Project != nil && active.Project.Kind == domain.ProjectKindCodeMint:
+		slog.Info("dispatcher: routing to system assistant")
 		return d.dispatchToSystemAssistant(ctx, active, rawArgs)
-	}
+	case active.Project != nil && active.Project.Kind == domain.ProjectKindCoding:
+		// Coding session: use workflow registry to route if available.
+		if d.workflowRegistry != nil {
+			if def, found := d.workflowRegistry.FindByTrigger(rawArgs); found {
+				// Route to the matched workflow (EPIC-02 will implement handlers).
+				return d.handleWorkflow(ctx, active, def, rawArgs)
+			}
 
-	// Project session: use workflow registry to route if available.
-	if d.workflowRegistry != nil {
-		if def, found := d.workflowRegistry.FindByTrigger(rawArgs); found {
-			// Route to the matched workflow (EPIC-02 will implement handlers).
-			return d.handleWorkflow(ctx, active, def, rawArgs)
+			// No trigger matched: default to ProjectCoding workflow.
+			def, err := d.workflowRegistry.Lookup(domain.WorkflowTypeProjectCoding)
+			if err == nil {
+				return d.handleWorkflow(ctx, active, def, rawArgs)
+			}
 		}
-
-		// No trigger matched: default to ProjectCoding workflow.
-		def, err := d.workflowRegistry.Lookup(domain.WorkflowTypeProjectCoding)
-		if err == nil {
-			return d.handleWorkflow(ctx, active, def, rawArgs)
-		}
+		// Fallback: hand off to Brainstormer placeholder (EPIC-02).
+		return fmt.Errorf("%w: input=%q", ErrNoBrainstormer, rawArgs)
+	default:
+		return fmt.Errorf("dispatcher: unsupported project kind %q", active.Project.Kind)
 	}
-
-	// Fallback: hand off to Brainstormer placeholder (EPIC-02).
-	return fmt.Errorf("%w: input=%q", ErrNoBrainstormer, rawArgs)
 }
 
 // dispatchToSystemAssistant routes freeform text to the system assistant.
 // It streams the response back to all registered adapters via the mediator.
 func (d *Dispatcher) dispatchToSystemAssistant(ctx context.Context, active *ActiveSession, text string) error {
+	slog.Info("dispatcher: dispatchToSystemAssistant called",
+		"text", text,
+		"has_assistant", d.systemAssistant != nil,
+	)
+
 	if d.systemAssistant == nil {
+		slog.Warn("dispatcher: system assistant is nil")
 		if d.ui != nil {
 			d.ui.RenderMessage("System Assistant is not available. Run CodeMint with --with-assistant to enable it.")
 		}
@@ -156,10 +179,15 @@ func (d *Dispatcher) dispatchToSystemAssistant(ctx context.Context, active *Acti
 
 	// Build the assistant session from ActiveSession.
 	sess := agent.AssistantSession{
-		Session:  active.Session,
-		Project:  active.Project,
-		IsGlobal: active.IsGlobal,
+		Session:     active.Session,
+		Project:     active.Project,
+		IsCodeMint:  active.IsCodeMintSession(),
 	}
+
+	slog.Info("dispatcher: calling system assistant Ask",
+		"session_id", active.Session.ID,
+		"is_codemint", sess.IsCodeMint,
+	)
 
 	// Call the assistant.
 	chunks, err := d.systemAssistant.Ask(ctx, sess, text)

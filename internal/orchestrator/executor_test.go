@@ -208,6 +208,9 @@ func (m *mockSessionRepo) ListActive(_ context.Context) ([]*domain.Session, erro
 func (m *mockSessionRepo) GetMostRecentActive(_ context.Context) (*domain.Session, error) {
 	return nil, nil
 }
+func (m *mockSessionRepo) CountActiveByProjectID(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
 
 // --- Legacy Tests ---
 
@@ -1185,8 +1188,8 @@ func TestExecutor_Coding_BuildsTypedParams(t *testing.T) {
 	}
 
 	// Verify prompt
-	if params.Prompt != "Implement feature X" {
-		t.Errorf("prompt mismatch: got %q", params.Prompt)
+	if len(params.Prompt) != 1 || params.Prompt[0].Type != "text" || params.Prompt[0].Text != "Implement feature X" {
+		t.Errorf("prompt mismatch: got %v", params.Prompt)
 	}
 
 	// Verify context files (should be absolute paths)

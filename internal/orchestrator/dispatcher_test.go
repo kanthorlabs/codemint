@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"codemint.kanthorlabs.com/internal/agent"
+	"codemint.kanthorlabs.com/internal/domain"
 	"codemint.kanthorlabs.com/internal/registry"
 	"codemint.kanthorlabs.com/internal/repl"
 )
@@ -51,14 +52,20 @@ func newTestRegistry(captureArgs *[]string, captureRaw *string) *registry.Comman
 	return r
 }
 
-// cliSession returns an ActiveSession in CLI mode for test convenience.
+// cliSession returns an ActiveSession in CLI mode with a CodeMint project for test convenience.
 func cliSession() *ActiveSession {
-	return &ActiveSession{ClientMode: registry.ClientModeCLI, IsGlobal: true}
+	return &ActiveSession{
+		ClientMode: registry.ClientModeCLI,
+		Project:    &domain.Project{Kind: domain.ProjectKindCodeMint},
+	}
 }
 
-// daemonSession returns an ActiveSession in Daemon mode for test convenience.
+// daemonSession returns an ActiveSession in Daemon mode with a CodeMint project for test convenience.
 func daemonSession() *ActiveSession {
-	return &ActiveSession{ClientMode: registry.ClientModeDaemon, IsGlobal: true}
+	return &ActiveSession{
+		ClientMode: registry.ClientModeDaemon,
+		Project:    &domain.Project{Kind: domain.ProjectKindCodeMint},
+	}
 }
 
 // --- Test A: Strict Parse ---
@@ -270,10 +277,13 @@ func TestDispatch_NaturalLanguage_GlobalSession_NilAssistant_FriendlyError(t *te
 	}
 }
 
-func TestDispatch_NaturalLanguage_ProjectSession_ReturnsBrainstormerError(t *testing.T) {
+func TestDispatch_NaturalLanguage_CodingSession_ReturnsBrainstormerError(t *testing.T) {
 	r := registry.NewCommandRegistry()
 	d := NewDispatcher(r, noopUI{}, nil, nil)
-	active := &ActiveSession{ClientMode: registry.ClientModeCLI, IsGlobal: false}
+	active := &ActiveSession{
+		ClientMode: registry.ClientModeCLI,
+		Project:    &domain.Project{Kind: domain.ProjectKindCoding},
+	}
 
 	err := d.Dispatch(context.Background(), active, "add a login endpoint")
 	if err == nil {

@@ -105,12 +105,26 @@ const (
 	YoloModeOn  YoloMode = 1    // 1 - Permissive mode, allows potentially risky operations with warnings.
 )
 
+// ProjectKind distinguishes project types for routing and permissions.
+type ProjectKind string
+
+const (
+	// ProjectKindCoding represents a user's codebase project (requires git).
+	ProjectKindCoding ProjectKind = "coding"
+	// ProjectKindCodeMint represents the sentinel project for non-project work
+	// (chat, research, blogging). Always exists, auto-created on launch.
+	ProjectKindCodeMint ProjectKind = "codemint"
+)
+
 // Project is the top-level context entity representing a codebase workspace.
 type Project struct {
-	ID         string `db:"id"`
-	Name       string `db:"name"`
-	WorkingDir string `db:"working_dir"`
-	YoloMode   int    `db:"yolo_mode"`
+	ID                string         `db:"id"`
+	Name              string         `db:"name"`
+	WorkingDir        string         `db:"working_dir"`
+	YoloMode          int            `db:"yolo_mode"`
+	Kind              ProjectKind    `db:"kind"`
+	AssistantProvider sql.NullString `db:"assistant_provider"`
+	AssistantModel    sql.NullString `db:"assistant_model"`
 }
 
 // ProjectPermission defines command-level access controls for a project.
@@ -191,12 +205,14 @@ func NewNullString(s string) sql.NullString {
 // --- Factory Constructors ---
 
 // NewProject creates a new Project with a generated UUID v7 primary key.
-func NewProject(name, workingDir string) *Project {
+// The kind parameter specifies the project type (ProjectKindCoding or ProjectKindCodeMint).
+func NewProject(name, workingDir string, kind ProjectKind) *Project {
 	return &Project{
 		ID:         idgen.MustNew(),
 		Name:       name,
 		WorkingDir: workingDir,
 		YoloMode:   int(YoloModeOff),
+		Kind:       kind,
 	}
 }
 

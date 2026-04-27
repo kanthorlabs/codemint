@@ -138,9 +138,10 @@ func (u UpdateBody) MarshalJSON() ([]byte, error) {
 
 // InitializeParams represents the parameters for the initialize request.
 type InitializeParams struct {
-	ClientInfo    ClientInfo `json:"clientInfo"`
-	Capabilities  Caps       `json:"capabilities"`
-	WorkingDir    string     `json:"workingDir,omitempty"`
+	ProtocolVersion int        `json:"protocolVersion"`
+	ClientInfo      ClientInfo `json:"clientInfo"`
+	Capabilities    Caps       `json:"capabilities"`
+	WorkingDir      string     `json:"workingDir,omitempty"`
 }
 
 // ClientInfo identifies the client to the ACP server.
@@ -173,10 +174,27 @@ type ServerCaps struct {
 	Planning  bool `json:"planning,omitempty"`
 }
 
+// McpEnvVariable represents an environment variable for MCP server configuration.
+type McpEnvVariable struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// McpServer represents an MCP server configuration for ACP session setup.
+// Per ACP spec, all agents MUST support the stdio transport.
+type McpServer struct {
+	Name    string           `json:"name"`              // Human-readable identifier for the server
+	Command string           `json:"command"`           // Absolute path to the MCP server executable
+	Args    []string         `json:"args"`              // Command-line arguments to pass to the server
+	Env     []McpEnvVariable `json:"env,omitempty"`     // Environment variables to set when launching
+}
+
 // SessionNewParams represents the parameters for session/new.
 type SessionNewParams struct {
-	SessionID    string `json:"sessionId,omitempty"`    // optional; server generates if empty
-	SystemPrompt string `json:"systemPrompt,omitempty"` // optional; injected memory/context for the session
+	SessionID    string      `json:"sessionId,omitempty"`    // optional; server generates if empty
+	SystemPrompt string      `json:"systemPrompt,omitempty"` // optional; injected memory/context for the session
+	Cwd          string      `json:"cwd"`                    // required; working directory for the session
+	McpServers   []McpServer `json:"mcpServers"`             // required; MCP server configurations (can be empty array)
 }
 
 // SessionNewResult represents the result of session/new.
@@ -184,10 +202,23 @@ type SessionNewResult struct {
 	SessionID string `json:"sessionId"`
 }
 
+// ContentBlock represents a content block in ACP protocol.
+// Per ACP spec, this follows the same structure as MCP ContentBlock.
+type ContentBlock struct {
+	Type string `json:"type"`          // "text", "image", "audio", "resource", "resource_link"
+	Text string `json:"text,omitempty"` // For type="text"
+	// Additional fields for other content types can be added as needed
+}
+
+// TextContent creates a text content block from a string.
+func TextContent(text string) ContentBlock {
+	return ContentBlock{Type: "text", Text: text}
+}
+
 // SessionPromptParams represents the parameters for session/prompt.
 type SessionPromptParams struct {
 	SessionID string             `json:"sessionId"`
-	Prompt    string             `json:"prompt"`
+	Prompt    []ContentBlock     `json:"prompt"`           // Array of content blocks per ACP spec
 	Context   []PromptContextRef `json:"context,omitempty"`
 	Tools     []string           `json:"tools,omitempty"`
 }

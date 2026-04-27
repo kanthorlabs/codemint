@@ -126,6 +126,13 @@ func run() error {
 		return fmt.Errorf("seed system agents: %w", err)
 	}
 
+	// Step 6b: Ensure CodeMint sentinel project exists (Story 2.0).
+	// This creates the project, workspace directory, permission row, and session if missing.
+	permissionRepo := sqlite.NewProjectPermissionRepo(dbConn)
+	if err := orchestrator.EnsureCodeMintProject(ctx, xdg.WorkspaceDir(), projectRepo, sessionRepo, permissionRepo); err != nil {
+		return fmt.Errorf("ensure codemint project: %w", err)
+	}
+
 	// Step 7: Create command registry and register core commands.
 	cmdRegistry := registry.NewCommandRegistry()
 	if err := repl.RegisterCoreCommands(cmdRegistry); err != nil {
@@ -197,7 +204,6 @@ func run() error {
 	}
 	// Step 9d: Create ACP Runtime.
 	// The Runtime wires together Pipeline, Interceptor, StatusMapper, Fanout, and BufferRegistry.
-	permissionRepo := sqlite.NewProjectPermissionRepo(dbConn)
 	bufferRegistry := acp.NewBufferRegistry(acp.DefaultBufferCapacity)
 
 	acpRuntime, err := orchestrator.NewRuntime(ctx, orchestrator.RuntimeConfig{
@@ -309,6 +315,18 @@ func run() error {
 	}
 	if err := repl.RegisterSessionCommands(cmdRegistry, sessionCmdDeps); err != nil {
 		return fmt.Errorf("register session commands: %w", err)
+	}
+
+	// Register project commands (Story 2.0).
+	projectCmdDeps := &repl.ProjectCommandDeps{
+		ProjectRepo:      projectRepo,
+		SessionRepo:      sessionRepo,
+		PermissionRepo:   permissionRepo,
+		ActiveSession:    activeSession,
+		ProviderRegistry: providerRegistry,
+	}
+	if err := repl.RegisterProjectCommands(cmdRegistry, projectCmdDeps); err != nil {
+		return fmt.Errorf("register project commands: %w", err)
 	}
 
 	// Register mode commands.

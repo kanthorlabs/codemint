@@ -1,8 +1,16 @@
 # Appeding Tasks
 
+DONE (Story 2.0):
+
+1. ~~Project should have type enum: Coding, Research, etc. Only Coding projects have the TaskType enum with Coding/Verification/Confirmation/Coordination.~~
+   - Implemented `ProjectKind` enum with `ProjectKindCoding` and `ProjectKindCodeMint` values.
+   - CodeMint is the sentinel project for non-project work (chat, research, blogging).
+   - Added `/project-open`, `/project-list`, `/project-assistant` commands.
+   - CodeMint sessions bypass Interceptor permission checks (auto-allow all tool calls).
+   - Per-project assistant override via `assistant_provider` and `assistant_model` columns.
+
 TODO: 
 
-1. Project should have type enum: Coding, Research, etc. Only Coding projects have the TaskType enum with Coding/Verification/Confirmation/Coordination.
 2. System Agent: do fallback parsing for command input, do slack+jira checking, so on.
 3. Session Continuity: User Story 1.19 — TUI ↔ CUI mode switching with session persistence and handoff.
 
@@ -17,3 +25,5 @@ TODO:
 ## Agent Notes
 
 - Always find relevant tests of the code you are working on, and run them to ensure your changes do not break existing functionality.
+
+## TODO

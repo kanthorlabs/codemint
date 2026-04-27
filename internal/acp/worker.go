@@ -194,6 +194,8 @@ func (w *Worker) Send(msg *Message) error {
 	default:
 	}
 
+	slog.Info("worker.Send", "method", msg.Method, "id", string(msg.ID))
+
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("acp: marshal message: %w", err)
@@ -463,6 +465,8 @@ func (w *Worker) ResetContext(ctx context.Context, currentSessionID string) (str
 func (w *Worker) createSession(ctx context.Context, systemPrompt string) (string, error) {
 	newParams := SessionNewParams{
 		SystemPrompt: systemPrompt,
+		Cwd:          w.cfg.Cwd,
+		McpServers:   []McpServer{}, // Empty for now; MCP server support can be added later
 	}
 	newReq, err := NewRequest(MethodSessionNew, newParams)
 	if err != nil {
@@ -508,6 +512,7 @@ func (w *Worker) SystemPrompt() string {
 // initialize performs the JSON-RPC initialize handshake.
 func (w *Worker) initialize(ctx context.Context) error {
 	params := InitializeParams{
+		ProtocolVersion: 1, // ACP protocol version
 		ClientInfo: ClientInfo{
 			Name:    "codemint",
 			Version: "0.1.0",

@@ -49,4 +49,7 @@ type SessionRepository interface {
 
 	// ListActive returns all active sessions (status=0) ordered by last_activity_at descending.
 	ListActive(ctx context.Context) ([]*domain.Session, error)
+
+	// CountActiveByProjectID returns the count of active sessions for a project.
+	CountActiveByProjectID(ctx context.Context, projectID string) (int, error)
 }

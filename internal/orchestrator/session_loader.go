@@ -125,14 +125,16 @@ func (l *SessionLoader) LoadMostRecentSession(ctx context.Context, clientMode re
 }
 
 // CreateActiveSession creates an ActiveSession from a LoadResult.
+// Note: With the bootstrap, result.Session should never be nil since
+// the CodeMint project always has an active session.
 func (l *SessionLoader) CreateActiveSession(result *LoadResult, clientMode registry.ClientMode) *ActiveSession {
 	clientID := GenerateClientID(clientMode)
 
 	if result.Session == nil {
+		// This should not happen after bootstrap, but handle gracefully.
 		return &ActiveSession{
 			ClientMode:  clientMode,
 			ClientID:    clientID,
-			IsGlobal:    true,
 			IsSuspended: false,
 			Project:     nil,
 			Session:     nil,
@@ -150,7 +152,6 @@ func (l *SessionLoader) CreateActiveSession(result *LoadResult, clientMode regis
 	return &ActiveSession{
 		ClientMode:  clientMode,
 		ClientID:    clientID,
-		IsGlobal:    false,
 		IsSuspended: false,
 		Project:     result.Project,
 		Session:     result.Session,

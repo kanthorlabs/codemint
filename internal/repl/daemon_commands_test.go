@@ -67,12 +67,13 @@ type mockActiveSessionForDaemon struct {
 	clientMode registry.ClientMode
 }
 
-func (m *mockActiveSessionForDaemon) GetClientMode() registry.ClientMode { return m.clientMode }
-func (m *mockActiveSessionForDaemon) GetIsGlobal() bool                  { return m.sessionID == "" }
-func (m *mockActiveSessionForDaemon) GetSessionID() string               { return m.sessionID }
-func (m *mockActiveSessionForDaemon) GetClientID() string                { return "test-client" }
-func (m *mockActiveSessionForDaemon) SetSession(_ any, _ any, _ bool)    {}
-func (m *mockActiveSessionForDaemon) SetSuspended(_ bool)                {}
+func (m *mockActiveSessionForDaemon) GetClientMode() registry.ClientMode  { return m.clientMode }
+func (m *mockActiveSessionForDaemon) GetIsCodeMint() bool                 { return m.sessionID == "" }
+func (m *mockActiveSessionForDaemon) GetSessionID() string                { return m.sessionID }
+func (m *mockActiveSessionForDaemon) GetProjectID() string                { return "" }
+func (m *mockActiveSessionForDaemon) GetClientID() string                 { return "test-client" }
+func (m *mockActiveSessionForDaemon) SetSession(_ any, _ any, _ bool)     {}
+func (m *mockActiveSessionForDaemon) SetSuspended(_ bool)                 {}
 func (m *mockActiveSessionForDaemon) SetClientMode(_ registry.ClientMode) {}
 
 // TestTasksHandler_NoSession tests /tasks with no active session.

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"codemint.kanthorlabs.com/internal/db"
+	"codemint.kanthorlabs.com/internal/domain"
 	"codemint.kanthorlabs.com/internal/orchestrator"
 	"codemint.kanthorlabs.com/internal/registry"
 	"codemint.kanthorlabs.com/internal/repl"
@@ -88,10 +89,14 @@ func TestREPLExitCommand(t *testing.T) {
 	// Create dispatcher.
 	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil, nil)
 
-	// Create active session.
+	// Create active session with a test project.
 	activeSession := &orchestrator.ActiveSession{
 		ClientMode: registry.ClientModeCLI,
-		IsGlobal:   true,
+		Project: &domain.Project{
+			ID:   "proj-test",
+			Name: "Test Project",
+			Kind: domain.ProjectKindCodeMint,
+		},
 	}
 
 	// Create dispatcher wrapper.
@@ -157,10 +162,14 @@ func TestREPLHelpCommand(t *testing.T) {
 	// Create dispatcher.
 	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil, nil)
 
-	// Create active session.
+	// Create active session with a test project.
 	activeSession := &orchestrator.ActiveSession{
 		ClientMode: registry.ClientModeCLI,
-		IsGlobal:   true,
+		Project: &domain.Project{
+			ID:   "proj-test",
+			Name: "Test Project",
+			Kind: domain.ProjectKindCodeMint,
+		},
 	}
 
 	// Create dispatcher wrapper.
@@ -230,10 +239,14 @@ func TestREPLContextCancellation(t *testing.T) {
 	// Create dispatcher.
 	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil, nil)
 
-	// Create active session.
+	// Create active session with a test project.
 	activeSession := &orchestrator.ActiveSession{
 		ClientMode: registry.ClientModeCLI,
-		IsGlobal:   true,
+		Project: &domain.Project{
+			ID:   "proj-test",
+			Name: "Test Project",
+			Kind: domain.ProjectKindCodeMint,
+		},
 	}
 
 	// Create dispatcher wrapper.

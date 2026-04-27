@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync/atomic"
 )
@@ -76,7 +77,25 @@ func (p *Pipeline) Run(ctx context.Context) {
 				// Input channel closed, drain complete
 				return
 			}
-			p.route(Classify(msg))
+			classified := Classify(msg)
+			paramsPreview := string(msg.Params)
+			if len(paramsPreview) > 200 {
+				paramsPreview = paramsPreview[:200]
+			}
+			var errStr string
+			if msg.Error != nil {
+				errStr = fmt.Sprintf("code=%d msg=%s", msg.Error.Code, msg.Error.Message)
+			}
+			slog.Info("pipeline.Run: read",
+				"kind", classified.Kind,
+				"method", msg.Method,
+				"has_id", len(msg.ID) > 0,
+				"has_result", len(msg.Result) > 0,
+				"has_error", msg.Error != nil,
+				"error", errStr,
+				"params_preview", paramsPreview,
+			)
+			p.route(classified)
 		}
 	}
 }

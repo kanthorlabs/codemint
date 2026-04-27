@@ -158,6 +158,7 @@ func (rt *Runtime) AttachWorker(ctx context.Context, sess *domain.Session, proje
 	if err != nil {
 		return nil, err
 	}
+	rt.logger.Info("AttachWorker GetOrSpawn", "worker_ptr", fmt.Sprintf("%p", worker))
 
 	// Check if we already have a consumer running for this session.
 	rt.consumersMu.RLock()
@@ -184,21 +185,24 @@ func (rt *Runtime) AttachWorker(ctx context.Context, sess *domain.Session, proje
 	// Determine working directory.
 	workingDir := ""
 	projectID := ""
+	projectKind := domain.ProjectKindCoding
 	if project != nil {
 		workingDir = project.WorkingDir
 		projectID = project.ID
+		projectKind = project.Kind
 	}
 
 	// Create the interceptor for this session.
 	interceptor := NewInterceptor(InterceptorConfig{
-		PermRepo:   rt.permissionRepo,
-		TaskRepo:   rt.taskRepo,
-		AgentRepo:  rt.agentRepo,
-		UI:         rt.mediator,
-		Worker:     worker,
-		Logger:     rt.logger,
-		ProjectID:  projectID,
-		WorkingDir: workingDir,
+		PermRepo:    rt.permissionRepo,
+		TaskRepo:    rt.taskRepo,
+		AgentRepo:   rt.agentRepo,
+		UI:          rt.mediator,
+		Worker:      worker,
+		Logger:      rt.logger,
+		ProjectID:   projectID,
+		ProjectKind: projectKind,
+		WorkingDir:  workingDir,
 	})
 
 	// Store the interceptor.
@@ -272,6 +276,31 @@ func (rt *Runtime) AttachWorker(ctx context.Context, sess *domain.Session, proje
 		"session_id", sessionID,
 		"project_id", projectID,
 		"has_permissions", permissions != nil,
+	)
+
+	return worker, nil
+}
+
+// AttachWorkerRaw spawns (or retrieves) an ACP worker without starting the pipeline.
+// Use this for direct event consumption (e.g., system assistant chat) where the
+// caller handles worker.Out() directly and doesn't need task status mapping.
+//
+// Unlike AttachWorker, this does NOT create Pipeline, StatusMapper, Interceptor,
+// or PipelineConsumer - the caller is responsible for consuming worker.Out().
+func (rt *Runtime) AttachWorkerRaw(ctx context.Context, sess *domain.Session, project *domain.Project) (*acp.Worker, error) {
+	if sess == nil {
+		return nil, nil
+	}
+
+	// Get or spawn the worker without pipeline setup.
+	worker, err := rt.registry.GetOrSpawn(ctx, sess, project)
+	if err != nil {
+		return nil, err
+	}
+	rt.logger.Info("AttachWorkerRaw GetOrSpawn", "worker_ptr", fmt.Sprintf("%p", worker))
+
+	rt.logger.Info("runtime: attached raw worker",
+		"session_id", sess.ID,
 	)
 
 	return worker, nil

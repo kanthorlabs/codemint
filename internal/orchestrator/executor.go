@@ -392,7 +392,7 @@ func (e *Executor) executeCoding(ctx context.Context, sess *ActiveSession, task 
 	// 6. Build and send session/prompt request with context and tools.
 	params := acp.SessionPromptParams{
 		SessionID: sess.GetACPSessionID(),
-		Prompt:    taskInput.Prompt,
+		Prompt:    []acp.ContentBlock{acp.TextContent(taskInput.Prompt)},
 		Context:   contextRefs,
 		Tools:     taskInput.Tools,
 	}

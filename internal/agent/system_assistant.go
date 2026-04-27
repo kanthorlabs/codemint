@@ -36,19 +36,26 @@ type ChatChunk struct {
 // AssistantSession provides the minimal session info needed by the assistant.
 // This avoids an import cycle with orchestrator.ActiveSession.
 type AssistantSession struct {
-	// Session is the domain session (may be nil for global mode).
+	// Session is the domain session (may be nil for legacy global mode).
 	Session *domain.Session
 	// Project is the domain project (may be nil for non-project queries).
 	Project *domain.Project
-	// IsGlobal indicates whether this is a global (non-project) session.
-	IsGlobal bool
+	// IsCodeMint indicates whether this is a CodeMint sentinel session
+	// (non-project work: chat, research, blogging).
+	IsCodeMint bool
 }
 
 // WorkerAttacher is an interface for attaching ACP workers to sessions.
 // This is implemented by orchestrator.Runtime to avoid import cycles.
 type WorkerAttacher interface {
 	// AttachWorker spawns or retrieves an ACP worker for the given session and project.
+	// This starts the full pipeline and consumer goroutines for task-oriented sessions.
 	AttachWorker(ctx context.Context, sess *domain.Session, project *domain.Project) (*acp.Worker, error)
+
+	// AttachWorkerRaw spawns or retrieves an ACP worker without starting the pipeline.
+	// Use this for direct event consumption (e.g., system assistant chat) where the
+	// caller handles worker.Out() directly and doesn't need task status mapping.
+	AttachWorkerRaw(ctx context.Context, sess *domain.Session, project *domain.Project) (*acp.Worker, error)
 }
 
 // SystemAssistant handles freeform conversational queries in non-project sessions.
@@ -116,9 +123,6 @@ func NewACPAssistant(cfg ACPAssistantConfig) (SystemAssistant, error) {
 	}, nil
 }
 
-// systemPrompt is the preamble sent to the assistant on first interaction.
-const systemPrompt = `You are CodeMint's System Assistant. Answer general questions about CodeMint, this conversation, or programming. You have no project context. Be concise.`
-
 // Ask implements SystemAssistant.Ask.
 // It spawns or retrieves an ACP worker for the session and sends the prompt.
 func (a *acpAssistant) Ask(ctx context.Context, sess AssistantSession, text string) (<-chan ChatChunk, error) {
@@ -138,7 +142,8 @@ func (a *acpAssistant) Ask(ctx context.Context, sess AssistantSession, text stri
 	}
 
 	// Attach worker (project can be nil for global mode).
-	worker, err := a.attacher.AttachWorker(ctx, session, sess.Project)
+	// Use AttachWorkerRaw to avoid starting the pipeline - we consume events directly.
+	worker, err := a.attacher.AttachWorkerRaw(ctx, session, sess.Project)
 	if err != nil {
 		close(ch)
 		return ch, fmt.Errorf("agent: attach worker: %w", err)
@@ -154,7 +159,7 @@ func (a *acpAssistant) Ask(ctx context.Context, sess AssistantSession, text stri
 	// Here we only send the user's prompt.
 	prompt := acp.SessionPromptParams{
 		SessionID: worker.ACPSessionID(),
-		Prompt:    text,
+		Prompt:    []acp.ContentBlock{acp.TextContent(text)},
 	}
 
 	// Create the JSON-RPC request message.
@@ -178,6 +183,8 @@ func (a *acpAssistant) Ask(ctx context.Context, sess AssistantSession, text stri
 
 // consumeEvents reads events from the worker and sends ChatChunks to the result channel.
 func (a *acpAssistant) consumeEvents(ctx context.Context, worker *acp.Worker, ch chan<- ChatChunk) {
+	slog.Info("consumeEvents: started", "session", worker.ACPSessionID())
+	defer slog.Info("consumeEvents: exited")
 	defer close(ch)
 
 	out := worker.Out()
@@ -195,6 +202,7 @@ func (a *acpAssistant) consumeEvents(ctx context.Context, worker *acp.Worker, ch
 
 			// Classify the event.
 			classified := acp.Classify(msg)
+			slog.Info("consumeEvents: read", "kind", classified.Kind)
 
 			switch classified.Kind {
 			case acp.EventMessage:

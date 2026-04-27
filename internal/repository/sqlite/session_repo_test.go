@@ -18,7 +18,7 @@ func setupSessionFixtures(t *testing.T) (sessionRepo repository.SessionRepositor
 	ctx := context.Background()
 
 	// Create a project for sessions to reference.
-	project := domain.NewProject("session-test-project", "/tmp/workspace")
+	project := domain.NewProject("session-test-project", "/tmp/workspace", domain.ProjectKindCoding)
 	if err := projectRepo.Create(ctx, project); err != nil {
 		t.Fatalf("Create project returned error: %v", err)
 	}
@@ -306,8 +306,8 @@ func TestSessionRepo_ListByProjectID_FiltersByProject(t *testing.T) {
 	ctx := context.Background()
 
 	// Create two projects.
-	project1 := domain.NewProject("project1", "/tmp/p1")
-	project2 := domain.NewProject("project2", "/tmp/p2")
+	project1 := domain.NewProject("project1", "/tmp/p1", domain.ProjectKindCoding)
+	project2 := domain.NewProject("project2", "/tmp/p2", domain.ProjectKindCoding)
 	if err := projectRepo.Create(ctx, project1); err != nil {
 		t.Fatalf("Create project1 returned error: %v", err)
 	}
@@ -345,8 +345,8 @@ func TestSessionRepo_ActiveSessionAcrossProjects(t *testing.T) {
 	ctx := context.Background()
 
 	// Create two projects.
-	project1 := domain.NewProject("project-a", "/tmp/a")
-	project2 := domain.NewProject("project-b", "/tmp/b")
+	project1 := domain.NewProject("project-a", "/tmp/a", domain.ProjectKindCoding)
+	project2 := domain.NewProject("project-b", "/tmp/b", domain.ProjectKindCoding)
 	if err := projectRepo.Create(ctx, project1); err != nil {
 		t.Fatalf("Create project1 returned error: %v", err)
 	}

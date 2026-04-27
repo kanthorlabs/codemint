@@ -28,8 +28,8 @@ var _ repository.ProjectRepository = (*projectRepo)(nil)
 // Create inserts a new project into the database.
 // Returns an error if a project with the same name already exists (UNIQUE constraint).
 func (r *projectRepo) Create(ctx context.Context, p *domain.Project) error {
-	const query = `INSERT INTO project (id, name, working_dir, yolo_mode) VALUES (?, ?, ?, ?)`
-	_, err := r.db.ExecContext(ctx, query, p.ID, p.Name, p.WorkingDir, p.YoloMode)
+	const query = `INSERT INTO project (id, name, working_dir, yolo_mode, kind, assistant_provider, assistant_model) VALUES (?, ?, ?, ?, ?, ?, ?)`
+	_, err := r.db.ExecContext(ctx, query, p.ID, p.Name, p.WorkingDir, p.YoloMode, p.Kind, p.AssistantProvider, p.AssistantModel)
 	if err != nil {
 		// SQLite returns "UNIQUE constraint failed" for duplicate name.
 		if isUniqueConstraintError(err) {
@@ -44,7 +44,7 @@ func (r *projectRepo) Create(ctx context.Context, p *domain.Project) error {
 // Returns nil, nil when no matching row exists.
 func (r *projectRepo) FindByID(ctx context.Context, id string) (*domain.Project, error) {
 	var p domain.Project
-	err := r.db.GetContext(ctx, &p, `SELECT id, name, working_dir, yolo_mode FROM project WHERE id = ?`, id)
+	err := r.db.GetContext(ctx, &p, `SELECT id, name, working_dir, yolo_mode, kind, assistant_provider, assistant_model FROM project WHERE id = ?`, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -58,7 +58,7 @@ func (r *projectRepo) FindByID(ctx context.Context, id string) (*domain.Project,
 // Returns nil, nil when no matching row exists.
 func (r *projectRepo) FindByName(ctx context.Context, name string) (*domain.Project, error) {
 	var p domain.Project
-	err := r.db.GetContext(ctx, &p, `SELECT id, name, working_dir, yolo_mode FROM project WHERE name = ?`, name)
+	err := r.db.GetContext(ctx, &p, `SELECT id, name, working_dir, yolo_mode, kind, assistant_provider, assistant_model FROM project WHERE name = ?`, name)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -110,11 +110,36 @@ func (r *projectRepo) Delete(ctx context.Context, id string) error {
 // List returns all projects in the repository, ordered by name.
 func (r *projectRepo) List(ctx context.Context) ([]*domain.Project, error) {
 	var projects []*domain.Project
-	err := r.db.SelectContext(ctx, &projects, `SELECT id, name, working_dir, yolo_mode FROM project ORDER BY name`)
+	err := r.db.SelectContext(ctx, &projects, `SELECT id, name, working_dir, yolo_mode, kind, assistant_provider, assistant_model FROM project ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: list projects: %w", err)
 	}
 	return projects, nil
+}
+
+// UpdateAssistantBinding updates the assistant provider and model for a project.
+// Pass empty strings to clear the binding (sets columns to NULL).
+func (r *projectRepo) UpdateAssistantBinding(ctx context.Context, id, provider, model string) error {
+	const query = `UPDATE project SET assistant_provider = ?, assistant_model = ? WHERE id = ?`
+	var providerVal, modelVal sql.NullString
+	if provider != "" {
+		providerVal = sql.NullString{String: provider, Valid: true}
+	}
+	if model != "" {
+		modelVal = sql.NullString{String: model, Valid: true}
+	}
+	result, err := r.db.ExecContext(ctx, query, providerVal, modelVal, id)
+	if err != nil {
+		return fmt.Errorf("sqlite: update assistant binding for project %q: %w", id, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: update assistant binding for project %q: %w", id, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("sqlite: project %q not found", id)
+	}
+	return nil
 }
 
 // isUniqueConstraintError checks if the error is a SQLite UNIQUE constraint violation.

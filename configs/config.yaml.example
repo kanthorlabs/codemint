@@ -1,21 +1,21 @@
 # CodeMint Configuration
 # Copy to ~/.config/codemint/config.yaml
 
-workflows:
-  - type: 0
-    name: "Project Coding"
-    description: "Context-aware coding tasks within a project"
-    triggers: ["implement", "fix", "refactor", "add feature", "code", "write"]
+# workflows:
+#   - type: 0
+#     name: "Project Coding"
+#     description: "Context-aware coding tasks within a project"
+#     triggers: ["implement", "fix", "refactor", "add feature", "code", "write"]
 
-  - type: 1
-    name: "Communication"
-    description: "General inquiries and explanations"
-    triggers: ["explain", "what is", "how does", "tell me", "describe", "help"]
+#   - type: 1
+#     name: "Communication"
+#     description: "General inquiries and explanations"
+#     triggers: ["explain", "what is", "how does", "tell me", "describe", "help"]
 
-  - type: 2
-    name: "Daily Checking"
-    description: "Status checks and routine operations"
-    triggers: ["status", "check", "verify", "test", "review", "analyze"]
+#   - type: 2
+#     name: "Daily Checking"
+#     description: "Status checks and routine operations"
+#     triggers: ["status", "check", "verify", "test", "review", "analyze"]
 
 # Available ACP providers. Names matching the built-in catalog (opencode, codex,
 # claude-code) inherit defaults — only override fields you need.
@@ -23,17 +23,14 @@ workflows:
 #   - name: opencode
 #     # command: opencode    # default; override only if not on PATH
 #     # args: ["acp"]
-#   - name: codex
-#   - name: claude-code
-#     command: claude
 
 # Bind logical assistants to a provider and (optionally) a model.
 # Omit the entire block to use the OpenCode default with the Provider's
 # default model.
-# assistants:
-#   system:
-#     provider: opencode
-#     model: "github-copilot/claude-sonnet-4.6"
+assistants:
+  system:
+    provider: opencode
+    model: "github-copilot/claude-sonnet-4.6"
 #   brainstormer:        # EPIC-02
 #     provider: opencode
 #     model: "github-copilot/claude-sonnet-4.6"

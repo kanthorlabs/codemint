@@ -175,3 +175,14 @@ func (r *sessionRepo) ListActive(ctx context.Context) ([]*domain.Session, error)
 	}
 	return sessions, nil
 }
+
+// CountActiveByProjectID returns the count of active sessions for a project.
+func (r *sessionRepo) CountActiveByProjectID(ctx context.Context, projectID string) (int, error) {
+	var count int
+	const query = `SELECT COUNT(*) FROM session WHERE project_id = ? AND status = ?`
+	err := r.db.GetContext(ctx, &count, query, projectID, int(domain.SessionStatusActive))
+	if err != nil {
+		return 0, fmt.Errorf("sqlite: count active sessions for project %q: %w", projectID, err)
+	}
+	return count, nil
+}

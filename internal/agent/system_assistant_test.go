@@ -15,9 +15,9 @@ func TestNullAssistant_Ask_StreamsChunks(t *testing.T) {
 	assistant := NewNullAssistant("Hello, I'm the test assistant!")
 
 	sess := AssistantSession{
-		Session:  nil,
-		Project:  nil,
-		IsGlobal: true,
+		Session:    nil,
+		Project:    nil,
+		IsCodeMint: true,
 	}
 
 	chunks, err := assistant.Ask(context.Background(), sess, "What's a goroutine?")
@@ -76,7 +76,7 @@ func TestNullAssistant_Ask_WithContext_RespectsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	sess := AssistantSession{IsGlobal: true}
+	sess := AssistantSession{IsCodeMint: true}
 	chunks, err := assistant.Ask(ctx, sess, "test")
 	if err != nil {
 		t.Fatalf("Ask returned unexpected error: %v", err)
@@ -103,9 +103,9 @@ func TestAssistantSession_NoProject_StillWorks(t *testing.T) {
 	assistant := NewNullAssistant("Works without project")
 
 	sess := AssistantSession{
-		Session:  nil, // No session
-		Project:  nil, // No project
-		IsGlobal: true,
+		Session:    nil, // No session
+		Project:    nil, // No project
+		IsCodeMint: true,
 	}
 
 	chunks, err := assistant.Ask(context.Background(), sess, "hello")
@@ -130,8 +130,8 @@ func TestAssistantSession_WithSession_Works(t *testing.T) {
 			ID:     "test-session",
 			Status: domain.SessionStatusActive,
 		},
-		Project:  nil,
-		IsGlobal: false,
+		Project:    nil,
+		IsCodeMint: false,
 	}
 
 	chunks, err := assistant.Ask(context.Background(), sess, "hello")
@@ -186,6 +186,10 @@ func TestACPAssistant_NewACPAssistant_MissingBinary(t *testing.T) {
 type mockAttacher struct{}
 
 func (m *mockAttacher) AttachWorker(ctx context.Context, sess *domain.Session, project *domain.Project) (*acp.Worker, error) {
+	return nil, nil
+}
+
+func (m *mockAttacher) AttachWorkerRaw(ctx context.Context, sess *domain.Session, project *domain.Project) (*acp.Worker, error) {
 	return nil, nil
 }
 

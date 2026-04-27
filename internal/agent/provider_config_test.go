@@ -54,7 +54,7 @@ func TestWorkerConfigFromProvider_EmptyEnv(t *testing.T) {
 
 	cfg := WorkerConfigFromProvider(provider, "/dir")
 
-	if cfg.Env != nil && len(cfg.Env) > 0 {
+	if len(cfg.Env) > 0 {
 		t.Errorf("Env should be empty, got %v", cfg.Env)
 	}
 }

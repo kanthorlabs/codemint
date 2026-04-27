@@ -55,20 +55,6 @@ func WorkerConfigFromProviderWithBinding(p *Provider, binding config.AssistantBi
 	}
 }
 
-// mergeEnv merges additional environment variables into the base environment.
-func mergeEnv(base []string, extra map[string]string) []string {
-	if len(extra) == 0 {
-		return base
-	}
-
-	result := make([]string, len(base))
-	copy(result, base)
-	for k, v := range extra {
-		result = append(result, k+"="+v)
-	}
-	return result
-}
-
 // ResolveSystemAssistantProvider resolves the provider for the system assistant.
 // It checks for CODEMINT_ACP_CMD env override first (Story 3.1 compatibility),
 // then falls back to the registry resolution.

@@ -39,6 +39,10 @@ type ProjectRepository interface {
 	// Returns an error if the project does not exist.
 	Update(ctx context.Context, p *domain.Project) error
 
+	// UpdateAssistantBinding updates the assistant provider and model for a project.
+	// Pass empty strings to clear the binding (sets columns to NULL).
+	UpdateAssistantBinding(ctx context.Context, id, provider, model string) error
+
 	// Delete removes a project and cascades to sessions, tasks, and permissions.
 	// Returns an error if the project does not exist.
 	Delete(ctx context.Context, id string) error

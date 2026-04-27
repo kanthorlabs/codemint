@@ -176,7 +176,7 @@ func acpPromptHandler(deps *ACPCommandDeps) registry.Handler {
 		// Send the prompt.
 		promptParams := acp.SessionPromptParams{
 			SessionID: acpSessionID,
-			Prompt:    prompt,
+			Prompt:    []acp.ContentBlock{acp.TextContent(prompt)},
 		}
 		promptReq, err := acp.NewRequest(acp.MethodSessionPrompt, promptParams)
 		if err != nil {
@@ -430,7 +430,9 @@ func acpResetHandler(deps *ACPCommandDeps) registry.Handler {
 
 // createACPSession creates a new ACP session by sending session/new.
 func createACPSession(ctx context.Context, worker *acp.Worker) (string, error) {
-	req, err := acp.NewRequest(acp.MethodSessionNew, acp.SessionNewParams{})
+	req, err := acp.NewRequest(acp.MethodSessionNew, acp.SessionNewParams{
+		McpServers: []acp.McpServer{}, // Must be an array, not null
+	})
 	if err != nil {
 		return "", fmt.Errorf("create session/new request: %w", err)
 	}

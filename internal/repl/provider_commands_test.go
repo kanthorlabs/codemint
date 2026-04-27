@@ -160,4 +160,4 @@ func TestCheckProviderStatus(t *testing.T) {
 type mockProviderActiveSession struct{}
 
 func (m mockProviderActiveSession) GetClientMode() registry.ClientMode { return registry.ClientModeCLI }
-func (m mockProviderActiveSession) GetIsGlobal() bool                  { return false }
+func (m mockProviderActiveSession) GetIsCodeMint() bool                { return false }

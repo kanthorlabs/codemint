@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"codemint.kanthorlabs.com/internal/agent"
+	"codemint.kanthorlabs.com/internal/domain"
 	"codemint.kanthorlabs.com/internal/input"
 	"codemint.kanthorlabs.com/internal/registry"
 	"codemint.kanthorlabs.com/internal/ui"
@@ -53,10 +54,10 @@ func TestInputMultiplexer_CrossInterfaceLoop(t *testing.T) {
 	// Create dispatcher with the mock assistant.
 	dispatcher := NewDispatcher(cmdRegistry, mockUI, assistant, nil)
 
-	// Create active session.
+	// Create active session with CodeMint project.
 	active := &ActiveSession{
 		ClientMode: registry.ClientModeHybrid,
-		IsGlobal:   true,
+		Project:    &domain.Project{Kind: domain.ProjectKindCodeMint},
 	}
 
 	// Register both TUI and CUI sources.
@@ -160,10 +161,10 @@ loop:
 func TestInputMultiplexer_SourceAttribution(t *testing.T) {
 	ctx := context.Background()
 
-	// Create active session.
+	// Create active session with CodeMint project.
 	active := &ActiveSession{
 		ClientMode: registry.ClientModeHybrid,
-		IsGlobal:   true,
+		Project:    &domain.Project{Kind: domain.ProjectKindCodeMint},
 	}
 
 	// Test SetInputSource and GetInputSource.

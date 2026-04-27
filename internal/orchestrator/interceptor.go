@@ -54,8 +54,9 @@ type Interceptor struct {
 	runner    *LocalRunner
 
 	// Project context for permission matching
-	projectID  string
-	workingDir string
+	projectID   string
+	projectKind domain.ProjectKind
+	workingDir  string
 
 	// pending stores approval requests awaiting human decision, keyed by task ID.
 	// For ad-hoc prompts without a task, keyed by ACP session ID.
@@ -80,6 +81,7 @@ type InterceptorConfig struct {
 	Worker          *acp.Worker
 	Logger          *slog.Logger
 	ProjectID       string
+	ProjectKind     domain.ProjectKind
 	WorkingDir      string
 	ApprovalTimeout time.Duration // Defaults to DefaultApprovalTimeout if zero.
 }
@@ -105,6 +107,7 @@ func NewInterceptor(cfg InterceptorConfig) *Interceptor {
 		logger:           logger,
 		runner:           NewLocalRunner(),
 		projectID:        cfg.ProjectID,
+		projectKind:      cfg.ProjectKind,
 		workingDir:       cfg.WorkingDir,
 		pending:          make(map[string]*PendingApproval),
 		sessionWhitelist: make(map[string]struct{}),
@@ -116,6 +119,12 @@ func NewInterceptor(cfg InterceptorConfig) *Interceptor {
 type HandleContext struct {
 	SessionID string
 	TaskID    string
+}
+
+// isCodeMintSession returns true if the project is the CodeMint sentinel project.
+// CodeMint sessions bypass permission checks and auto-allow all tool calls.
+func (i *Interceptor) isCodeMintSession() bool {
+	return i.projectKind == domain.ProjectKindCodeMint
 }
 
 // Handle processes a halted event from the Pipeline. It evaluates the command
@@ -140,6 +149,12 @@ func (i *Interceptor) Handle(ctx context.Context, ev acp.Event, hctx HandleConte
 
 // handleToolCall processes a tool_call event by evaluating it against permissions.
 func (i *Interceptor) handleToolCall(ctx context.Context, ev acp.Event, hctx HandleContext) {
+	// CodeMint sessions bypass permission checks entirely.
+	if i.isCodeMintSession() {
+		i.executeAndRespond(ctx, ev, hctx)
+		return
+	}
+
 	// Only evaluate shell commands; other tool calls go to UI
 	if ev.Command == "" {
 		i.forwardToUI(ev, hctx.TaskID, "unknown tool call without command")
@@ -166,6 +181,12 @@ func (i *Interceptor) handleToolCall(ctx context.Context, ev acp.Event, hctx Han
 // handlePermissionRequest processes a session/request_permission event.
 // Permission requests follow the same evaluation logic as tool calls.
 func (i *Interceptor) handlePermissionRequest(ctx context.Context, ev acp.Event, hctx HandleContext) {
+	// CodeMint sessions bypass permission checks entirely.
+	if i.isCodeMintSession() {
+		i.executeAndRespondPermission(ctx, ev, hctx)
+		return
+	}
+
 	// Only evaluate shell commands
 	if ev.Command == "" {
 		i.forwardToUI(ev, hctx.TaskID, "unknown permission request")
@@ -192,6 +213,10 @@ func (i *Interceptor) handlePermissionRequest(ctx context.Context, ev acp.Event,
 // evaluateCommand loads project permissions and evaluates the command.
 func (i *Interceptor) evaluateCommand(ctx context.Context, command, cwd string) Decision {
 	if i.projectID == "" {
+		return DecisionUnknown
+	}
+
+	if i.permRepo == nil {
 		return DecisionUnknown
 	}
 

@@ -77,7 +77,10 @@ type CommandResult struct {
 // concrete orchestrator.ActiveSession struct.
 type ActiveSessionInfo interface {
 	GetClientMode() ClientMode
-	GetIsGlobal() bool
+	// GetIsCodeMint returns true if this is a CodeMint sentinel session
+	// (non-project work: chat, research, blogging). Returns false for
+	// Coding-kind project sessions.
+	GetIsCodeMint() bool
 }
 
 // MutableSessionInfo extends ActiveSessionInfo with methods to modify session state.
@@ -86,6 +89,8 @@ type MutableSessionInfo interface {
 	ActiveSessionInfo
 	// GetSessionID returns the current session ID, or empty if global mode.
 	GetSessionID() string
+	// GetProjectID returns the current project ID, or empty if no project.
+	GetProjectID() string
 	// GetClientID returns the unique identifier for this client instance.
 	GetClientID() string
 	// SetSession updates the active session and project.

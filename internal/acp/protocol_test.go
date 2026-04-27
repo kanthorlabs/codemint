@@ -249,7 +249,7 @@ func TestMessage_ParseResult_WithError(t *testing.T) {
 func TestSessionPromptParams_RoundTrip(t *testing.T) {
 	params := SessionPromptParams{
 		SessionID: "sess-abc",
-		Prompt:    "explain this code",
+		Prompt:    []ContentBlock{TextContent("explain this code")},
 	}
 	msg, err := NewRequest(MethodSessionPrompt, params)
 	if err != nil {
@@ -274,7 +274,7 @@ func TestSessionPromptParams_RoundTrip(t *testing.T) {
 	if parsedParams.SessionID != "sess-abc" {
 		t.Errorf("SessionID = %q; want %q", parsedParams.SessionID, "sess-abc")
 	}
-	if parsedParams.Prompt != "explain this code" {
-		t.Errorf("Prompt = %q; want %q", parsedParams.Prompt, "explain this code")
+	if len(parsedParams.Prompt) != 1 || parsedParams.Prompt[0].Type != "text" || parsedParams.Prompt[0].Text != "explain this code" {
+		t.Errorf("Prompt = %v; want [{Type: text, Text: explain this code}]", parsedParams.Prompt)
 	}
 }

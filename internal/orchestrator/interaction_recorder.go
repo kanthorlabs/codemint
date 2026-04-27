@@ -55,7 +55,8 @@ func (r *InteractionRecorder) Record(ctx context.Context, active *ActiveSession,
 // legacy callers using the non-multiplexed Loop.
 func (r *InteractionRecorder) RecordWithSource(ctx context.Context, active *ActiveSession, input string, isSlash bool, cmdName string, response string, source string, userID string, err error) error {
 	// Only record if we have an active project session.
-	if active.IsGlobal || active.Session == nil || active.Project == nil {
+	// CodeMint sessions now persist as Coordination tasks under the CodeMint project.
+	if active.Session == nil || active.Project == nil {
 		return nil
 	}
 

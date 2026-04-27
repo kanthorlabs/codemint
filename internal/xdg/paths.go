@@ -74,6 +74,12 @@ func DatabasePath() string {
 	return filepath.Join(DataDir(), "codemint.db")
 }
 
+// WorkspaceDir returns the workspace directory for the CodeMint sentinel project.
+// This is where the CodeMint project stores its working files.
+func WorkspaceDir() string {
+	return filepath.Join(DataDir(), "workspace")
+}
+
 // StateDir returns the base directory for runtime state files (logs, sockets).
 // This follows the XDG Base Directory spec for state data.
 //

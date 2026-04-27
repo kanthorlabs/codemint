@@ -18,22 +18,20 @@ type ProjectSwitchCallback func(*domain.Project)
 // consulted by the Dispatcher to determine how to route natural-language input
 // and which commands are permitted.
 //
-// When IsGlobal is true the session operates outside a specific code project;
-// Project and Session are nil. When IsGlobal is false both fields must be
-// non-nil and the session is bound to a particular codebase.
+// Project and Session are always non-nil after bootstrap — the CodeMint
+// sentinel project guarantees at least one session exists. Use
+// IsCodeMintSession() to distinguish CodeMint sessions from Coding sessions.
 type ActiveSession struct {
 	// ClientMode describes the runtime environment (CLI terminal or daemon/CUI).
 	ClientMode registry.ClientMode
 	// ClientID is a unique identifier for this client instance (format: "{mode}:{uuid}").
 	ClientID string
-	// IsGlobal indicates that this session has no associated project.
-	IsGlobal bool
 	// IsSuspended indicates that another client has taken over this session.
 	// The client can reclaim ownership by typing any input.
 	IsSuspended bool
-	// Project is the active code project. Nil when IsGlobal is true.
+	// Project is the active code project. Always non-nil after bootstrap.
 	Project *domain.Project
-	// Session is the active execution session. Nil when IsGlobal is true.
+	// Session is the active execution session. Always non-nil after bootstrap.
 	Session *domain.Session
 	// YoloEnabled mirrors Project.YoloMode for quick access.
 	YoloEnabled bool
@@ -71,8 +69,17 @@ type ActiveSession struct {
 // GetClientMode satisfies registry.ActiveSessionInfo.
 func (a *ActiveSession) GetClientMode() registry.ClientMode { return a.ClientMode }
 
-// GetIsGlobal satisfies registry.ActiveSessionInfo.
-func (a *ActiveSession) GetIsGlobal() bool { return a.IsGlobal }
+// GetIsCodeMint satisfies registry.ActiveSessionInfo.
+// Returns true if this is a CodeMint sentinel session (non-project work).
+func (a *ActiveSession) GetIsCodeMint() bool {
+	return a.Project != nil && a.Project.Kind == domain.ProjectKindCodeMint
+}
+
+// IsCodeMintSession returns true if this is a CodeMint sentinel session.
+// This is a convenience method that wraps GetIsCodeMint().
+func (a *ActiveSession) IsCodeMintSession() bool {
+	return a.GetIsCodeMint()
+}
 
 // GetSessionID satisfies registry.MutableSessionInfo.
 func (a *ActiveSession) GetSessionID() string {
@@ -80,6 +87,14 @@ func (a *ActiveSession) GetSessionID() string {
 		return ""
 	}
 	return a.Session.ID
+}
+
+// GetProjectID satisfies registry.MutableSessionInfo.
+func (a *ActiveSession) GetProjectID() string {
+	if a.Project == nil {
+		return ""
+	}
+	return a.Project.ID
 }
 
 // GetClientID satisfies registry.MutableSessionInfo.
@@ -96,7 +111,6 @@ func (a *ActiveSession) SetSession(session any, project any, yoloEnabled bool) {
 	if session == nil {
 		a.Session = nil
 		a.Project = nil
-		a.IsGlobal = true
 		a.YoloEnabled = false
 
 		// Fire callbacks if project changed.
@@ -109,7 +123,6 @@ func (a *ActiveSession) SetSession(session any, project any, yoloEnabled bool) {
 	newProject := project.(*domain.Project)
 	a.Session = session.(*domain.Session)
 	a.Project = newProject
-	a.IsGlobal = false
 	a.YoloEnabled = yoloEnabled
 
 	// Fire callbacks if project changed.

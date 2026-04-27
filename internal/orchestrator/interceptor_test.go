@@ -1030,3 +1030,124 @@ func TestInterceptor_AwaitingApprovalNotification(t *testing.T) {
 		t.Errorf("task ID = %s, want task-notify", payload.TaskID)
 	}
 }
+
+// TestInterceptor_CodeMintSession_BypassesPermissionChecks verifies that CodeMint
+// sessions auto-allow all tool calls without permission checks or prompts.
+func TestInterceptor_CodeMintSession_BypassesPermissionChecks(t *testing.T) {
+	ui := &mockUIMediator{}
+	// Note: No permission repo, no allowed commands - would normally prompt or block
+
+	interceptor := NewInterceptor(InterceptorConfig{
+		UI:          ui,
+		ProjectID:   "codemint-project-id",
+		ProjectKind: domain.ProjectKindCodeMint, // CodeMint kind enables bypass
+		WorkingDir:  "/tmp",
+	})
+
+	ev := acp.Event{
+		Kind:         acp.EventToolCall,
+		ACPSessionID: "sess-1",
+		ToolName:     "bash",
+		Command:      "rm -rf /dangerous/command", // Would normally be blocked/unknown
+		Cwd:          "/tmp",
+		Raw:          []byte(`{}`),
+	}
+
+	hctx := HandleContext{
+		SessionID: "session-1",
+		TaskID:    "task-123",
+	}
+
+	interceptor.Handle(context.Background(), ev, hctx)
+
+	// Should NOT have prompted the user
+	requests := ui.PromptRequests()
+	if len(requests) != 0 {
+		t.Errorf("expected 0 prompt requests for CodeMint session, got %d", len(requests))
+	}
+
+	// Should NOT have rendered a halt message
+	messages := ui.Messages()
+	if len(messages) != 0 {
+		t.Errorf("expected 0 halt messages for CodeMint session, got %d: %v", len(messages), messages)
+	}
+
+	// Verify isCodeMintSession returns true
+	if !interceptor.isCodeMintSession() {
+		t.Error("isCodeMintSession() should return true for ProjectKindCodeMint")
+	}
+}
+
+// TestInterceptor_CodeMintSession_PermissionRequest verifies that permission requests
+// are also auto-allowed in CodeMint sessions.
+func TestInterceptor_CodeMintSession_PermissionRequest(t *testing.T) {
+	ui := &mockUIMediator{}
+
+	interceptor := NewInterceptor(InterceptorConfig{
+		UI:          ui,
+		ProjectID:   "codemint-project-id",
+		ProjectKind: domain.ProjectKindCodeMint,
+		WorkingDir:  "/tmp",
+	})
+
+	ev := acp.Event{
+		Kind:         acp.EventPermissionRequest,
+		ACPSessionID: "sess-1",
+		ToolName:     "write",
+		Command:      "write to file",
+		Raw:          []byte(`{}`),
+	}
+
+	hctx := HandleContext{
+		SessionID: "session-1",
+		TaskID:    "task-123",
+	}
+
+	interceptor.Handle(context.Background(), ev, hctx)
+
+	// Should NOT have prompted the user
+	requests := ui.PromptRequests()
+	if len(requests) != 0 {
+		t.Errorf("expected 0 prompt requests for CodeMint permission request, got %d", len(requests))
+	}
+}
+
+// TestInterceptor_CodingSession_StillRequiresPermissions verifies that regular
+// Coding sessions still require permission checks (no bypass).
+func TestInterceptor_CodingSession_StillRequiresPermissions(t *testing.T) {
+	ui := &mockUIMediator{}
+	ui.SetPromptResponse(&registry.PromptResponse{SelectedOptionID: ApprovalOptionDeny})
+
+	interceptor := NewInterceptor(InterceptorConfig{
+		UI:              ui,
+		ProjectID:       "coding-project-id",
+		ProjectKind:     domain.ProjectKindCoding, // Coding kind requires permissions
+		WorkingDir:      "/tmp",
+		ApprovalTimeout: 100 * time.Millisecond,
+	})
+
+	ev := acp.Event{
+		Kind:         acp.EventToolCall,
+		ACPSessionID: "sess-1",
+		ToolName:     "bash",
+		Command:      "ls -la",
+		Cwd:          "/tmp",
+		Raw:          []byte(`{}`),
+	}
+
+	hctx := HandleContext{
+		SessionID: "session-1",
+		TaskID:    "task-123",
+	}
+
+	interceptor.Handle(context.Background(), ev, hctx)
+
+	// Wait for async prompt
+	time.Sleep(200 * time.Millisecond)
+
+	// Should have prompted the user for Coding session
+	requests := ui.PromptRequests()
+	if len(requests) != 1 {
+		t.Errorf("expected 1 prompt request for Coding session, got %d", len(requests))
+	}
+}

@@ -13,7 +13,7 @@ func TestProjectRepo_Create(t *testing.T) {
 	repo := NewProjectRepo(conn)
 	ctx := context.Background()
 
-	project := domain.NewProject("test-project", "/tmp/workspace")
+	project := domain.NewProject("test-project", "/tmp/workspace", domain.ProjectKindCoding)
 
 	err := repo.Create(ctx, project)
 	if err != nil {
@@ -40,6 +40,9 @@ func TestProjectRepo_Create(t *testing.T) {
 	if found.YoloMode != project.YoloMode {
 		t.Errorf("YoloMode mismatch: got %d, want %d", found.YoloMode, project.YoloMode)
 	}
+	if found.Kind != domain.ProjectKindCoding {
+		t.Errorf("Kind mismatch: got %q, want %q", found.Kind, domain.ProjectKindCoding)
+	}
 }
 
 func TestProjectRepo_CreateDuplicateName(t *testing.T) {
@@ -47,8 +50,8 @@ func TestProjectRepo_CreateDuplicateName(t *testing.T) {
 	repo := NewProjectRepo(conn)
 	ctx := context.Background()
 
-	project1 := domain.NewProject("duplicate-name", "/tmp/workspace1")
-	project2 := domain.NewProject("duplicate-name", "/tmp/workspace2")
+	project1 := domain.NewProject("duplicate-name", "/tmp/workspace1", domain.ProjectKindCoding)
+	project2 := domain.NewProject("duplicate-name", "/tmp/workspace2", domain.ProjectKindCoding)
 	project2.ID = idgen.MustNew() // Ensure different ID
 
 	if err := repo.Create(ctx, project1); err != nil {
@@ -70,7 +73,7 @@ func TestProjectRepo_FindByID(t *testing.T) {
 	repo := NewProjectRepo(conn)
 	ctx := context.Background()
 
-	project := domain.NewProject("find-by-id-test", "/tmp/workspace")
+	project := domain.NewProject("find-by-id-test", "/tmp/workspace", domain.ProjectKindCoding)
 	if err := repo.Create(ctx, project); err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
@@ -106,7 +109,7 @@ func TestProjectRepo_FindByName(t *testing.T) {
 	repo := NewProjectRepo(conn)
 	ctx := context.Background()
 
-	project := domain.NewProject("find-by-name-test", "/tmp/workspace")
+	project := domain.NewProject("find-by-name-test", "/tmp/workspace", domain.ProjectKindCoding)
 	if err := repo.Create(ctx, project); err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
@@ -142,7 +145,7 @@ func TestProjectRepo_FindByName_CaseSensitive(t *testing.T) {
 	repo := NewProjectRepo(conn)
 	ctx := context.Background()
 
-	project := domain.NewProject("CaseSensitive", "/tmp/workspace")
+	project := domain.NewProject("CaseSensitive", "/tmp/workspace", domain.ProjectKindCoding)
 	if err := repo.Create(ctx, project); err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
@@ -171,7 +174,7 @@ func TestProjectRepo_Update(t *testing.T) {
 	repo := NewProjectRepo(conn)
 	ctx := context.Background()
 
-	project := domain.NewProject("update-test", "/tmp/original")
+	project := domain.NewProject("update-test", "/tmp/original", domain.ProjectKindCoding)
 	if err := repo.Create(ctx, project); err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
@@ -227,8 +230,8 @@ func TestProjectRepo_Update_DuplicateName(t *testing.T) {
 	repo := NewProjectRepo(conn)
 	ctx := context.Background()
 
-	project1 := domain.NewProject("project-one", "/tmp/workspace1")
-	project2 := domain.NewProject("project-two", "/tmp/workspace2")
+	project1 := domain.NewProject("project-one", "/tmp/workspace1", domain.ProjectKindCoding)
+	project2 := domain.NewProject("project-two", "/tmp/workspace2", domain.ProjectKindCoding)
 
 	if err := repo.Create(ctx, project1); err != nil {
 		t.Fatalf("Create project1 returned error: %v", err)
@@ -250,7 +253,7 @@ func TestProjectRepo_Delete(t *testing.T) {
 	repo := NewProjectRepo(conn)
 	ctx := context.Background()
 
-	project := domain.NewProject("delete-test", "/tmp/workspace")
+	project := domain.NewProject("delete-test", "/tmp/workspace", domain.ProjectKindCoding)
 	if err := repo.Create(ctx, project); err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
@@ -299,9 +302,9 @@ func TestProjectRepo_List(t *testing.T) {
 	}
 
 	// Create multiple projects.
-	project1 := domain.NewProject("alpha-project", "/tmp/alpha")
-	project2 := domain.NewProject("beta-project", "/tmp/beta")
-	project3 := domain.NewProject("gamma-project", "/tmp/gamma")
+	project1 := domain.NewProject("alpha-project", "/tmp/alpha", domain.ProjectKindCoding)
+	project2 := domain.NewProject("beta-project", "/tmp/beta", domain.ProjectKindCoding)
+	project3 := domain.NewProject("gamma-project", "/tmp/gamma", domain.ProjectKindCoding)
 
 	for _, p := range []*domain.Project{project3, project1, project2} { // Insert out of order
 		if err := repo.Create(ctx, p); err != nil {
@@ -334,7 +337,7 @@ func TestProjectRepo_Delete_CascadesToSessions(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a project with a session.
-	project := domain.NewProject("cascade-test", "/tmp/workspace")
+	project := domain.NewProject("cascade-test", "/tmp/workspace", domain.ProjectKindCoding)
 	if err := projectRepo.Create(ctx, project); err != nil {
 		t.Fatalf("Create project returned error: %v", err)
 	}
@@ -356,5 +359,86 @@ func TestProjectRepo_Delete_CascadesToSessions(t *testing.T) {
 	}
 	if found != nil {
 		t.Errorf("session should have been deleted by cascade, got %+v", found)
+	}
+}
+
+func TestProjectRepo_KindRoundtrip(t *testing.T) {
+	conn := openTestDB(t)
+	repo := NewProjectRepo(conn)
+	ctx := context.Background()
+
+	// Test ProjectKindCodeMint round-trips correctly.
+	project := domain.NewProject("codemint-test", "/tmp/workspace", domain.ProjectKindCodeMint)
+	if err := repo.Create(ctx, project); err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	found, err := repo.FindByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("FindByID returned error: %v", err)
+	}
+	if found == nil {
+		t.Fatal("FindByID returned nil, expected project")
+	}
+	if found.Kind != domain.ProjectKindCodeMint {
+		t.Errorf("Kind mismatch: got %q, want %q", found.Kind, domain.ProjectKindCodeMint)
+	}
+}
+
+func TestProjectRepo_AssistantOverrideRoundtrip(t *testing.T) {
+	conn := openTestDB(t)
+	repo := NewProjectRepo(conn)
+	ctx := context.Background()
+
+	project := domain.NewProject("assistant-test", "/tmp/workspace", domain.ProjectKindCoding)
+	if err := repo.Create(ctx, project); err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	// Update assistant binding.
+	if err := repo.UpdateAssistantBinding(ctx, project.ID, "codex", "gpt-5"); err != nil {
+		t.Fatalf("UpdateAssistantBinding returned error: %v", err)
+	}
+
+	// Verify the update was persisted.
+	found, err := repo.FindByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("FindByID returned error: %v", err)
+	}
+	if !found.AssistantProvider.Valid || found.AssistantProvider.String != "codex" {
+		t.Errorf("AssistantProvider mismatch: got %v, want codex", found.AssistantProvider)
+	}
+	if !found.AssistantModel.Valid || found.AssistantModel.String != "gpt-5" {
+		t.Errorf("AssistantModel mismatch: got %v, want gpt-5", found.AssistantModel)
+	}
+
+	// Clear the binding by passing empty strings.
+	if err := repo.UpdateAssistantBinding(ctx, project.ID, "", ""); err != nil {
+		t.Fatalf("UpdateAssistantBinding (clear) returned error: %v", err)
+	}
+
+	found, err = repo.FindByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("FindByID returned error: %v", err)
+	}
+	if found.AssistantProvider.Valid {
+		t.Errorf("AssistantProvider should be NULL after clear, got %v", found.AssistantProvider)
+	}
+	if found.AssistantModel.Valid {
+		t.Errorf("AssistantModel should be NULL after clear, got %v", found.AssistantModel)
+	}
+}
+
+func TestProjectRepo_UpdateAssistantBinding_NotFound(t *testing.T) {
+	conn := openTestDB(t)
+	repo := NewProjectRepo(conn)
+	ctx := context.Background()
+
+	err := repo.UpdateAssistantBinding(ctx, idgen.MustNew(), "codex", "gpt-5")
+	if err == nil {
+		t.Fatal("UpdateAssistantBinding on non-existent project should have returned error")
+	}
+	if !contains(err.Error(), "not found") {
+		t.Errorf("error should mention 'not found', got: %v", err)
 	}
 }
