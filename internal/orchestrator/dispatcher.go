@@ -8,6 +8,7 @@ import (
 
 	"codemint.kanthorlabs.com/internal/agent"
 	"codemint.kanthorlabs.com/internal/domain"
+	"codemint.kanthorlabs.com/internal/input"
 	"codemint.kanthorlabs.com/internal/registry"
 	"codemint.kanthorlabs.com/internal/repl"
 	"codemint.kanthorlabs.com/internal/workflow"
@@ -221,17 +222,29 @@ func (d *Dispatcher) dispatchToSystemAssistant(ctx context.Context, active *Acti
 	return nil
 }
 
+// DispatchInbound implements repl.MuxDispatcher. It routes an InboundMessage
+// through the standard Dispatch path while recording the source metadata.
+func (d *Dispatcher) DispatchInbound(ctx context.Context, active *ActiveSession, msg input.InboundMessage) error {
+	// Stash source info in active session for recording.
+	active.SetInputSource(msg.Source, msg.UserID)
+	defer active.ClearInputSource()
+
+	return d.Dispatch(ctx, active, msg.Text)
+}
+
 // recordInteraction records a user interaction as a Coordination task.
 func (d *Dispatcher) recordInteraction(ctx context.Context, active *ActiveSession, input string, isSlash bool, cmdName string, response string, err error) {
 	if d.interactionRecorder != nil {
-		d.interactionRecorder.Record(ctx, active, input, isSlash, cmdName, response, err)
+		source, userID := active.GetInputSource()
+		d.interactionRecorder.RecordWithSource(ctx, active, input, isSlash, cmdName, response, source, userID, err)
 	}
 }
 
 // recordChat records a conversational exchange as a Coordination task.
 func (d *Dispatcher) recordChat(ctx context.Context, active *ActiveSession, userText string, assistantText string, err error) {
 	if d.interactionRecorder != nil {
-		d.interactionRecorder.RecordChat(ctx, active, userText, assistantText, string(active.ClientMode), err)
+		source, userID := active.GetInputSource()
+		d.interactionRecorder.RecordChatWithSource(ctx, active, userText, assistantText, source, userID, err)
 	}
 }
 

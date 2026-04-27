@@ -16,6 +16,8 @@ type InteractionInputPayload struct {
 	IsSlash bool   `json:"is_slash"`           // Whether this was a slash command
 	CmdName string `json:"cmd_name,omitempty"` // The command name if slash command
 	Text    string `json:"text,omitempty"`     // For chat: the user's prompt
+	Source  string `json:"source,omitempty"`   // Input source: "tui", "cui-telegram", etc.
+	UserID  string `json:"user_id,omitempty"`  // Source-specific user identifier
 }
 
 // InteractionOutputPayload is the JSON structure stored in task.output for Coordination tasks.
@@ -43,7 +45,15 @@ func NewInteractionRecorder(taskRepo repository.TaskRepository, agentRepo reposi
 
 // Record creates a Coordination task to record a user interaction.
 // This is called after command dispatch to capture what happened.
+// Deprecated: Use RecordWithSource for source-aware recording.
 func (r *InteractionRecorder) Record(ctx context.Context, active *ActiveSession, input string, isSlash bool, cmdName string, response string, err error) error {
+	return r.RecordWithSource(ctx, active, input, isSlash, cmdName, response, "", "", err)
+}
+
+// RecordWithSource creates a Coordination task with input source metadata.
+// source and userID are recorded for audit trails; they may be empty for
+// legacy callers using the non-multiplexed Loop.
+func (r *InteractionRecorder) RecordWithSource(ctx context.Context, active *ActiveSession, input string, isSlash bool, cmdName string, response string, source string, userID string, err error) error {
 	// Only record if we have an active project session.
 	if active.IsGlobal || active.Session == nil || active.Project == nil {
 		return nil
@@ -61,6 +71,8 @@ func (r *InteractionRecorder) Record(ctx context.Context, active *ActiveSession,
 		Command: input,
 		IsSlash: isSlash,
 		CmdName: cmdName,
+		Source:  source,
+		UserID:  userID,
 	}
 	inputJSON, jsonErr := json.Marshal(inputPayload)
 	if jsonErr != nil {
@@ -112,7 +124,14 @@ func (r *InteractionRecorder) Record(ctx context.Context, active *ActiveSession,
 // RecordChat creates a Coordination task to record a conversational exchange.
 // This is called after the system assistant responds to capture the round-trip.
 // source identifies the client mode (cli | daemon).
+// Deprecated: Use RecordChatWithSource for source-aware recording.
 func (r *InteractionRecorder) RecordChat(ctx context.Context, active *ActiveSession, userText string, assistantText string, source string, err error) error {
+	return r.RecordChatWithSource(ctx, active, userText, assistantText, source, "", err)
+}
+
+// RecordChatWithSource creates a Coordination task with input source metadata.
+// source and userID are recorded for audit trails; userID may be empty.
+func (r *InteractionRecorder) RecordChatWithSource(ctx context.Context, active *ActiveSession, userText string, assistantText string, source string, userID string, err error) error {
 	// For global sessions, we still want to record chat but use a placeholder.
 	// The session/project may be nil, so we handle gracefully.
 	
@@ -128,6 +147,8 @@ func (r *InteractionRecorder) RecordChat(ctx context.Context, active *ActiveSess
 		Command: "/chat",
 		IsSlash: false,
 		Text:    userText,
+		Source:  source,
+		UserID:  userID,
 	}
 	inputJSON, jsonErr := json.Marshal(inputPayload)
 	if jsonErr != nil {

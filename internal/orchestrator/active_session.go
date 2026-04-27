@@ -51,6 +51,13 @@ type ActiveSession struct {
 	// 0 = Task (everything), 1 = Story (no thinking), 2 = Epic (minimal).
 	Verbosity int
 
+	// inputSource tracks the source of the current inbound message for audit.
+	// Set by DispatchInbound, cleared after dispatch completes.
+	inputSource   string
+	inputSourceMu sync.RWMutex
+	// inputUserID tracks the user ID from the inbound message source.
+	inputUserID string
+
 	// projectSwitchCallbacks are invoked when the project changes.
 	projectSwitchCallbacks []ProjectSwitchCallback
 	projectSwitchMu        sync.RWMutex
@@ -221,6 +228,31 @@ func (a *ActiveSession) Wakeup() {
 	case a.wakeupCh <- struct{}{}:
 	default:
 	}
+}
+
+// SetInputSource records the source of the current inbound message.
+// Called by DispatchInbound before dispatch, cleared by ClearInputSource after.
+func (a *ActiveSession) SetInputSource(source, userID string) {
+	a.inputSourceMu.Lock()
+	defer a.inputSourceMu.Unlock()
+	a.inputSource = source
+	a.inputUserID = userID
+}
+
+// ClearInputSource clears the input source metadata after dispatch.
+func (a *ActiveSession) ClearInputSource() {
+	a.inputSourceMu.Lock()
+	defer a.inputSourceMu.Unlock()
+	a.inputSource = ""
+	a.inputUserID = ""
+}
+
+// GetInputSource returns the current input source and user ID.
+// Returns ("", "") if not set (e.g., when using legacy Loop without multiplexer).
+func (a *ActiveSession) GetInputSource() (source, userID string) {
+	a.inputSourceMu.RLock()
+	defer a.inputSourceMu.RUnlock()
+	return a.inputSource, a.inputUserID
 }
 
 // Compile-time assertion: *ActiveSession must satisfy registry.ActiveSessionInfo.
