@@ -105,6 +105,9 @@ func (m *mockTaskRepo) GetMaxSeqTask(_ context.Context, _ string) (int, error) {
 func (m *mockTaskRepo) ListByWorkflowAndStoryIDs(_ context.Context, _ string, _ []string) ([]*domain.Task, error) {
 	return nil, nil
 }
+func (m *mockTaskRepo) BulkInsert(_ context.Context, _ []*domain.Task) error {
+	return nil
+}
 
 type mockAgentRepo struct {
 	human       *domain.Agent

@@ -116,6 +116,10 @@ func (m *mockOptionsTaskRepo) ListByWorkflowAndStoryIDs(_ context.Context, workf
 	return result, nil
 }
 
+func (m *mockOptionsTaskRepo) BulkInsert(_ context.Context, _ []*domain.Task) error {
+	return nil
+}
+
 // containsOptionsStoryID checks if input JSON contains the given story_id.
 func containsOptionsStoryID(input string, storyID string) bool {
 	// Simple string match for testing purposes.

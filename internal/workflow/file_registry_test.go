@@ -307,6 +307,8 @@ epics:
 		resolver.AddSkill("@codemint/gatherer")
 		resolver.AddSkill("@codemint/goal-capture")
 		resolver.AddSkill("@codemint/targeted-gatherer")
+		resolver.AddSkill("@codemint/options-proposer")
+		resolver.AddSkill("@codemint/task-generator")
 
 		registry := NewFileRegistry()
 		err := registry.LoadAll(resolver)
@@ -355,6 +357,7 @@ epics:
 		resolver.AddSkill("@codemint/goal-capture")         // Used by embedded brainstorming
 		resolver.AddSkill("@codemint/targeted-gatherer")    // Used by embedded brainstorming
 		resolver.AddSkill("@codemint/options-proposer")     // Used by embedded brainstorming
+		resolver.AddSkill("@codemint/task-generator")       // Used by embedded brainstorming
 
 		registry := NewFileRegistry()
 		err := registry.LoadAll(resolver)
@@ -413,6 +416,7 @@ epics:
 		resolver.AddSkill("@codemint/goal-capture")
 		resolver.AddSkill("@codemint/targeted-gatherer")
 		resolver.AddSkill("@codemint/options-proposer")
+		resolver.AddSkill("@codemint/task-generator")
 
 		registry := NewFileRegistry()
 		err := registry.LoadAll(resolver)

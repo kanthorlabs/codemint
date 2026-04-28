@@ -114,6 +114,10 @@ func (m *statusMapperMockTaskRepo) ListByWorkflowAndStoryIDs(ctx context.Context
 	return nil, nil
 }
 
+func (m *statusMapperMockTaskRepo) BulkInsert(ctx context.Context, tasks []*domain.Task) error {
+	return nil
+}
+
 func (m *statusMapperMockTaskRepo) StatusUpdates() []statusUpdate {
 	m.mu.Lock()
 	defer m.mu.Unlock()

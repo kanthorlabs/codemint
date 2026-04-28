@@ -456,3 +456,46 @@ func (r *taskRepo) ListByWorkflowAndStoryIDs(ctx context.Context, workflowID str
 	}
 	return tasks, nil
 }
+
+// BulkInsert inserts multiple tasks in a single transaction.
+// If any insert fails, the entire transaction is rolled back.
+func (r *taskRepo) BulkInsert(ctx context.Context, tasks []*domain.Task) error {
+	if len(tasks) == 0 {
+		return nil
+	}
+
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite: begin bulk insert transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	const query = `
+		INSERT INTO task (
+			id, project_id, session_id, workflow_id, assignee_id,
+			seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id,
+			depends_on, condition
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	for _, t := range tasks {
+		_, err = tx.ExecContext(ctx, query,
+			t.ID, t.ProjectID, t.SessionID, t.WorkflowID, t.AssigneeID,
+			t.SeqEpic, t.SeqStory, t.SeqTask, int(t.Type), int(t.Status),
+			t.Timeout, t.Input, t.Output, t.ClientID,
+			t.DependsOn, t.Condition,
+		)
+		if err != nil {
+			return fmt.Errorf("sqlite: bulk insert task %q: %w", t.ID, err)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: commit bulk insert transaction: %w", err)
+	}
+
+	return nil
+}

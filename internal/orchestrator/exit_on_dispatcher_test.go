@@ -95,6 +95,9 @@ func (m *mockTaskRepoExitOn) GetMaxSeqTask(ctx context.Context, workflowID strin
 func (m *mockTaskRepoExitOn) ListByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) ([]*domain.Task, error) {
 	return nil, nil
 }
+func (m *mockTaskRepoExitOn) BulkInsert(ctx context.Context, tasks []*domain.Task) error {
+	return nil
+}
 
 func TestExitOnDispatcher_Register(t *testing.T) {
 	t.Parallel()

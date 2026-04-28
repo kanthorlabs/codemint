@@ -53,3 +53,12 @@ epics:
             - "/modify"
         output:
           handler: "lock_chosen_option"
+
+      - id: generate
+        name: "Plan Generation"
+        skill: "@codemint/task-generator"
+        type: coding
+        depends_on: propose_options
+        output:
+          schema: "skills/task-generator/references/task-schema.json"
+          handler: "create_implementation_tasks"

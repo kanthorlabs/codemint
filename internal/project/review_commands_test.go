@@ -84,6 +84,10 @@ func (m *mockTaskRepo) ListByWorkflowAndStoryIDs(_ context.Context, _ string, _ 
 	return nil, nil
 }
 
+func (m *mockTaskRepo) BulkInsert(_ context.Context, _ []*domain.Task) error {
+	return nil
+}
+
 // --- Mock CodingAgent ---
 
 type mockCodingAgent struct {

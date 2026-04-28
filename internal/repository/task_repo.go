@@ -85,4 +85,9 @@ type TaskRepository interface {
 	// the specified story IDs, ordered by (seq_epic, seq_story, seq_task) DESC.
 	// Used to find existing tasks for regeneration.
 	ListByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) ([]*domain.Task, error)
+
+	// BulkInsert inserts multiple tasks in a single transaction.
+	// If any insert fails, the entire transaction is rolled back.
+	// Used by Plan Generation (Story 2.5) to atomically insert the full plan.
+	BulkInsert(ctx context.Context, tasks []*domain.Task) error
 }

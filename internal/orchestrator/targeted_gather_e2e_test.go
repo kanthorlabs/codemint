@@ -393,6 +393,9 @@ func (m *mockTargetedGatherTaskRepo) GetMaxSeqTask(ctx context.Context, workflow
 func (m *mockTargetedGatherTaskRepo) ListByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) ([]*domain.Task, error) {
 	return nil, nil
 }
+func (m *mockTargetedGatherTaskRepo) BulkInsert(ctx context.Context, tasks []*domain.Task) error {
+	return nil
+}
 
 // mockTargetedGatherWorkflowRepo implements repository.WorkflowRepository for E2E tests.
 type mockTargetedGatherWorkflowRepo struct {

@@ -207,6 +207,10 @@ func (m *interceptorMockTaskRepo) ListByWorkflowAndStoryIDs(ctx context.Context,
 	return nil, nil
 }
 
+func (m *interceptorMockTaskRepo) BulkInsert(ctx context.Context, tasks []*domain.Task) error {
+	return nil
+}
+
 func (m *interceptorMockTaskRepo) StatusUpdates() []statusUpdate {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -88,6 +88,8 @@ func LockWorkflowGoalHandler(repo repository.WorkflowRepository) HandlerFunc {
 type RegisterBuiltinHandlersDeps struct {
 	WorkflowRepo repository.WorkflowRepository
 	TaskRepo     repository.TaskRepository
+	SessionRepo  repository.SessionRepository
+	AgentRepo    repository.AgentRepository
 	FileRegistry *FileRegistry
 }
 
@@ -95,9 +97,16 @@ type RegisterBuiltinHandlersDeps struct {
 // Call this during application startup to make handlers available to the orchestrator.
 func RegisterBuiltinHandlers(registry *HandlerRegistry, deps RegisterBuiltinHandlersDeps) error {
 	handlers := map[string]HandlerFunc{
-		"lock_workflow_goal":      LockWorkflowGoalHandler(deps.WorkflowRepo),
-		"append_targeted_context": AppendTargetedContextHandler(),
-		"lock_chosen_option":      LockChosenOptionHandler(deps.WorkflowRepo, deps.TaskRepo, deps.FileRegistry),
+		"lock_workflow_goal":           LockWorkflowGoalHandler(deps.WorkflowRepo),
+		"append_targeted_context":      AppendTargetedContextHandler(),
+		"lock_chosen_option":           LockChosenOptionHandler(deps.WorkflowRepo, deps.TaskRepo, deps.FileRegistry),
+		"create_implementation_tasks":  CreateImplementationTasksHandler(PlanGenerationDeps{
+			WorkflowRepo: deps.WorkflowRepo,
+			TaskRepo:     deps.TaskRepo,
+			SessionRepo:  deps.SessionRepo,
+			AgentRepo:    deps.AgentRepo,
+			FileRegistry: deps.FileRegistry,
+		}),
 	}
 
 	for name, fn := range handlers {

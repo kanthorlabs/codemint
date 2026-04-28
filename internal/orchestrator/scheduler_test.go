@@ -83,6 +83,9 @@ func (m *mockTaskRepoForScheduler) GetMaxSeqTask(_ context.Context, _ string) (i
 func (m *mockTaskRepoForScheduler) ListByWorkflowAndStoryIDs(_ context.Context, _ string, _ []string) ([]*domain.Task, error) {
 	return nil, nil
 }
+func (m *mockTaskRepoForScheduler) BulkInsert(_ context.Context, _ []*domain.Task) error {
+	return nil
+}
 
 type mockExecutorForScheduler struct {
 	executedTasks []*domain.Task
@@ -616,6 +619,9 @@ func (m *eligibilityMockTaskRepo) GetMaxSeqTask(_ context.Context, _ string) (in
 }
 func (m *eligibilityMockTaskRepo) ListByWorkflowAndStoryIDs(_ context.Context, _ string, _ []string) ([]*domain.Task, error) {
 	return nil, nil
+}
+func (m *eligibilityMockTaskRepo) BulkInsert(_ context.Context, _ []*domain.Task) error {
+	return nil
 }
 
 // TestScheduler_IsTaskEligible_NoDependency verifies that tasks without
