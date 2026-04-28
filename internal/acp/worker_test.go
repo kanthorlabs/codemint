@@ -52,10 +52,8 @@ const (
 type signalHandlerType int
 
 const (
-	// signalHandlerNone - no signal handling (default)
-	signalHandlerNone signalHandlerType = iota
 	// signalHandlerExitOnSIGTERM - exit 0 on SIGTERM
-	signalHandlerExitOnSIGTERM
+	signalHandlerExitOnSIGTERM signalHandlerType = iota + 1
 	// signalHandlerIgnoreSIGTERM - ignore SIGTERM
 	signalHandlerIgnoreSIGTERM
 )
@@ -318,7 +316,7 @@ func TestWorker_StopClosesChannel(t *testing.T) {
 		// Expected
 	case <-time.After(1 * time.Second):
 		t.Error("worker did not stop within 1s")
-		worker.Kill()
+		_ = worker.Kill()
 	}
 
 	// Verify out channel is closed
@@ -380,7 +378,7 @@ func TestWorker_Pid(t *testing.T) {
 	worker, _ := newMockACPScript().
 		withAfterHandshake(afterHandshakeWait).
 		spawnWorker(t, ctx)
-	defer worker.Kill()
+	defer func() { _ = worker.Kill() }()
 
 	pid := worker.Pid()
 	if pid <= 0 {

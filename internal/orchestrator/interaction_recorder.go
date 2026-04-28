@@ -56,7 +56,9 @@ func (r *InteractionRecorder) Record(ctx context.Context, active *ActiveSession,
 func (r *InteractionRecorder) RecordWithSource(ctx context.Context, active *ActiveSession, input string, isSlash bool, cmdName string, response string, source string, userID string, err error) error {
 	// Only record if we have an active project session.
 	// CodeMint sessions now persist as Coordination tasks under the CodeMint project.
-	if active.Session == nil || active.Project == nil {
+	session := active.GetSession()
+	project := active.GetProject()
+	if session == nil || project == nil {
 		return nil
 	}
 
@@ -95,8 +97,8 @@ func (r *InteractionRecorder) RecordWithSource(ctx context.Context, active *Acti
 	// Create the coordination task.
 	task := &domain.Task{
 		ID:         idgen.MustNew(),
-		ProjectID:  active.Project.ID,
-		SessionID:  active.Session.ID,
+		ProjectID:  project.ID,
+		SessionID:  session.ID,
 		WorkflowID: sql.NullString{}, // No workflow for coordination tasks
 		AssigneeID: humanAgent.ID,
 		SeqEpic:    0,
@@ -190,11 +192,13 @@ func (r *InteractionRecorder) RecordChatWithSource(ctx context.Context, active *
 	}
 
 	// Set project/session if available.
-	if active.Project != nil {
-		task.ProjectID = active.Project.ID
+	project := active.GetProject()
+	session := active.GetSession()
+	if project != nil {
+		task.ProjectID = project.ID
 	}
-	if active.Session != nil {
-		task.SessionID = active.Session.ID
+	if session != nil {
+		task.SessionID = session.ID
 	}
 
 	// Save to database.

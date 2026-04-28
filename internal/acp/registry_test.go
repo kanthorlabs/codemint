@@ -46,7 +46,7 @@ func TestRegistry_GetOrSpawn_Idempotent(t *testing.T) {
 	}
 
 	registry := NewRegistry(cfg)
-	defer registry.StopAll(context.Background())
+	defer func() { _ = registry.StopAll(context.Background()) }()
 
 	sess := domain.NewSession("project-123")
 	project := &domain.Project{
@@ -88,7 +88,7 @@ func TestRegistry_GetOrSpawn_Concurrent(t *testing.T) {
 	}
 
 	registry := NewRegistry(cfg)
-	defer registry.StopAll(context.Background())
+	defer func() { _ = registry.StopAll(context.Background()) }()
 
 	sess := domain.NewSession("project-123")
 	project := &domain.Project{
@@ -189,7 +189,7 @@ func TestRegistry_MultipleSessions(t *testing.T) {
 	}
 
 	registry := NewRegistry(cfg)
-	defer registry.StopAll(context.Background())
+	defer func() { _ = registry.StopAll(context.Background()) }()
 
 	ctx := context.Background()
 
@@ -306,7 +306,7 @@ func TestRegistry_DeadWorkerRespawn(t *testing.T) {
 	}
 
 	registry := NewRegistry(cfg)
-	defer registry.StopAll(context.Background())
+	defer func() { _ = registry.StopAll(context.Background()) }()
 
 	sess := domain.NewSession("project-123")
 	project := &domain.Project{
@@ -324,7 +324,7 @@ func TestRegistry_DeadWorkerRespawn(t *testing.T) {
 	pid1 := worker1.Pid()
 
 	// Kill the worker
-	worker1.Kill()
+	_ = worker1.Kill()
 	<-worker1.Done()
 
 	// Wait for cleanup goroutine

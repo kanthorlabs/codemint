@@ -416,7 +416,7 @@ func run() error {
 	}
 
 	// Step 12: Start heartbeat goroutine if we have an active session.
-	if activeSession.Session != nil {
+	if activeSession.GetSession() != nil {
 		heartbeat := orchestrator.NewHeartbeat(sessionRepo, activeSession)
 		go heartbeat.Start(ctx)
 	}
@@ -425,7 +425,7 @@ func run() error {
 	// The scheduler continuously pulls pending tasks and dispatches them to the ACP worker.
 	// It will exit when the context is cancelled (SIGINT/SIGTERM).
 	var scheduler *orchestrator.Scheduler
-	if activeSession.Session != nil && activeSession.Project != nil {
+	if activeSession.GetSession() != nil && activeSession.GetProject() != nil {
 		scheduler = orchestrator.NewSchedulerWithConfig(orchestrator.SchedulerConfig{
 			TaskRepo:      taskRepo,
 			WorkflowRepo:  workflowRepo,

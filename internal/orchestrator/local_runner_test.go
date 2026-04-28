@@ -242,7 +242,7 @@ func TestBoundedBuffer_OverLimit(t *testing.T) {
 	buf := newBoundedBuffer(5)
 
 	// First write fills the buffer
-	buf.Write([]byte("hello"))
+	_, _ = buf.Write([]byte("hello"))
 
 	// Second write should be discarded
 	n, err := buf.Write([]byte("world"))
@@ -264,7 +264,7 @@ func TestBoundedBuffer_PartialWrite(t *testing.T) {
 	buf := newBoundedBuffer(7)
 
 	// First write
-	buf.Write([]byte("hello"))
+	_, _ = buf.Write([]byte("hello"))
 
 	// Second write partially fits
 	n, err := buf.Write([]byte("world"))

@@ -132,14 +132,11 @@ func (l *SessionLoader) CreateActiveSession(result *LoadResult, clientMode regis
 
 	if result.Session == nil {
 		// This should not happen after bootstrap, but handle gracefully.
-		return &ActiveSession{
-			ClientMode:  clientMode,
-			ClientID:    clientID,
-			IsSuspended: false,
-			Project:     nil,
-			Session:     nil,
-			YoloEnabled: false,
+		active := &ActiveSession{
+			ClientMode: clientMode,
+			ClientID:   clientID,
 		}
+		return active
 	}
 
 	// Use the client ID from the session if already set.
@@ -149,14 +146,12 @@ func (l *SessionLoader) CreateActiveSession(result *LoadResult, clientMode regis
 
 	yoloEnabled := result.Project != nil && result.Project.YoloMode == int(domain.YoloModeOn)
 
-	return &ActiveSession{
-		ClientMode:  clientMode,
-		ClientID:    clientID,
-		IsSuspended: false,
-		Project:     result.Project,
-		Session:     result.Session,
-		YoloEnabled: yoloEnabled,
+	active := &ActiveSession{
+		ClientMode: clientMode,
+		ClientID:   clientID,
 	}
+	active.SetSession(result.Session, result.Project, yoloEnabled)
+	return active
 }
 
 // GenerateClientID creates a unique client identifier in the format "{mode}:{uuid}".

@@ -70,7 +70,7 @@ func (m *UIMediator) Adapters() []UIAdapter {
 // it writes to the configured io.Writer.
 func (m *UIMediator) RenderMessage(msg string) {
 	if m.writer != nil {
-		m.writer.Write([]byte(msg + "\n"))
+		_, _ = m.writer.Write([]byte(msg + "\n"))
 	}
 }
 
@@ -80,7 +80,7 @@ func (m *UIMediator) RenderMessage(msg string) {
 func (m *UIMediator) ClearScreen() {
 	// Write ANSI escape sequence to clear screen and move cursor to top-left.
 	if m.writer != nil {
-		m.writer.Write([]byte("\033[2J\033[H"))
+		_, _ = m.writer.Write([]byte("\033[2J\033[H"))
 	}
 }
 
@@ -142,7 +142,6 @@ func (m *UIMediator) PromptDecision(parentCtx context.Context, req registry.Prom
 	}
 
 	var firstErr error
-	var winnerIdx int = -1
 
 	// Collect responses until we get a success or all fail.
 	for received := 0; received < len(adapters); received++ {
@@ -150,11 +149,10 @@ func (m *UIMediator) PromptDecision(parentCtx context.Context, req registry.Prom
 		case r := <-resultCh:
 			if r.resp.Error == nil {
 				// First non-error response wins!
-				winnerIdx = r.idx
 				cancel() // Signal others to abort via context.
 
 				// Call CancelPrompt on all other adapters.
-				m.cancelOthers(adapters, winnerIdx, req.TaskID)
+				m.cancelOthers(adapters, r.idx, req.TaskID)
 
 				return r.resp
 			}

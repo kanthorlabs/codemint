@@ -54,8 +54,9 @@ func TestLookupBuiltinProvider_Codex(t *testing.T) {
 	if provider.Command != "codex" {
 		t.Errorf("Command = %q; want %q", provider.Command, "codex")
 	}
-	if !provider.Capabilities.Planning {
-		// Codex is now planning-aware in the test
+	// Codex CLI isn't planning-aware yet.
+	if provider.Capabilities.Planning {
+		t.Error("expected Capabilities.Planning to be false for codex")
 	}
 	if provider.SystemPromptStrategy != PromptStrategyFlag {
 		t.Errorf("SystemPromptStrategy = %v; want %v", provider.SystemPromptStrategy, PromptStrategyFlag)

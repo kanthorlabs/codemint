@@ -87,30 +87,6 @@ func (m *mockTaskRepoForScheduler) BulkInsert(_ context.Context, _ []*domain.Tas
 	return nil
 }
 
-type mockExecutorForScheduler struct {
-	executedTasks []*domain.Task
-	mu            sync.Mutex
-}
-
-func (m *mockExecutorForScheduler) ExecuteTask(_ context.Context, task *domain.Task) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.executedTasks = append(m.executedTasks, task)
-	return nil
-}
-
-// mockACPRegistryEntry simulates an ACP worker for testing.
-type mockACPRegistryEntry struct {
-	resetContextCalls []string // old session IDs passed to ResetContext
-	newSessionID      string
-	alive             bool
-}
-
-func (m *mockACPRegistryEntry) recordResetContext(oldSessionID string) string {
-	m.resetContextCalls = append(m.resetContextCalls, oldSessionID)
-	return m.newSessionID
-}
-
 // --- Tests ---
 
 // TestScheduler_StoryBoundaryDetection verifies that ResetContext is called
@@ -162,9 +138,7 @@ func TestScheduler_StoryBoundaryDetection(t *testing.T) {
 	lastOldSessionID := ""
 
 	// Create an active session
-	activeSession := &ActiveSession{
-		Session: &domain.Session{ID: sessionID},
-	}
+	activeSession := NewActiveSession(&domain.Session{ID: sessionID}, nil)
 	activeSession.SetACPSessionID("initial-session")
 
 	scheduler := NewScheduler(taskRepo, executor, nil, activeSession, nil)
@@ -245,9 +219,7 @@ func TestScheduler_SkipResetForCoordination(t *testing.T) {
 		},
 	}
 
-	activeSession := &ActiveSession{
-		Session: &domain.Session{ID: sessionID},
-	}
+	activeSession := NewActiveSession(&domain.Session{ID: sessionID}, nil)
 	activeSession.SetACPSessionID("initial-session")
 
 	scheduler := NewScheduler(nil, nil, nil, activeSession, nil)
@@ -294,9 +266,7 @@ func TestScheduler_SkipResetForConfirmation(t *testing.T) {
 		Timeout:   domain.DefaultTaskTimeout,
 	}
 
-	activeSession := &ActiveSession{
-		Session: &domain.Session{ID: sessionID},
-	}
+	activeSession := NewActiveSession(&domain.Session{ID: sessionID}, nil)
 	activeSession.SetACPSessionID("initial-session")
 
 	scheduler := NewScheduler(nil, nil, nil, activeSession, nil)
@@ -331,9 +301,7 @@ func TestScheduler_ResetOnCodingTask(t *testing.T) {
 		Timeout:   domain.DefaultTaskTimeout,
 	}
 
-	activeSession := &ActiveSession{
-		Session: &domain.Session{ID: sessionID},
-	}
+	activeSession := NewActiveSession(&domain.Session{ID: sessionID}, nil)
 	activeSession.SetACPSessionID("initial-session")
 
 	// Create scheduler without registry (simulates no worker)
@@ -369,9 +337,7 @@ func TestScheduler_NoResetWithinSameStory(t *testing.T) {
 		Timeout:   domain.DefaultTaskTimeout,
 	}
 
-	activeSession := &ActiveSession{
-		Session: &domain.Session{ID: sessionID},
-	}
+	activeSession := NewActiveSession(&domain.Session{ID: sessionID}, nil)
 	activeSession.SetACPSessionID("initial-session")
 
 	// Create a mock registry with a worker
@@ -398,10 +364,7 @@ func TestScheduler_NoResetWithinSameStory(t *testing.T) {
 func TestScheduler_RejectsConcurrentRun(t *testing.T) {
 	sessionID := idgen.MustNew()
 
-	activeSession := &ActiveSession{
-		Session: &domain.Session{ID: sessionID},
-		Project: &domain.Project{ID: idgen.MustNew()},
-	}
+	activeSession := NewActiveSessionWithYolo(&domain.Session{ID: sessionID}, &domain.Project{ID: idgen.MustNew()}, false)
 
 	taskRepo := &mockTaskRepoForScheduler{tasks: nil} // No tasks
 
@@ -471,9 +434,7 @@ func TestScheduler_RunsTasksInOrder(t *testing.T) {
 	// Override executor's ExecuteTask to track calls.
 	// Since we can't easily override, we'll use ProcessNextTask directly.
 
-	activeSession := &ActiveSession{
-		Session: &domain.Session{ID: sessionID},
-	}
+	activeSession := NewActiveSession(&domain.Session{ID: sessionID}, nil)
 
 	scheduler := NewScheduler(taskRepo, executor, nil, activeSession, nil)
 
@@ -628,14 +589,13 @@ func (m *eligibilityMockTaskRepo) BulkInsert(_ context.Context, _ []*domain.Task
 // depends_on are always eligible.
 func TestScheduler_IsTaskEligible_NoDependency(t *testing.T) {
 	repo := newEligibilityMockTaskRepo()
-	activeSession := &ActiveSession{
-		Session: &domain.Session{ID: idgen.MustNew()},
-	}
+	session := &domain.Session{ID: idgen.MustNew()}
+	activeSession := NewActiveSession(session, nil)
 	scheduler := NewScheduler(repo, nil, nil, activeSession, nil)
 
 	task := &domain.Task{
 		ID:        idgen.MustNew(),
-		SessionID: activeSession.Session.ID,
+		SessionID: session.ID,
 		Type:      domain.TaskTypeCoding,
 		Status:    domain.TaskStatusPending,
 		// DependsOn is not set (NULL)
@@ -651,15 +611,14 @@ func TestScheduler_IsTaskEligible_NoDependency(t *testing.T) {
 // depends_on wait until the predecessor reaches a terminal state.
 func TestScheduler_IsTaskEligible_WaitForTerminal(t *testing.T) {
 	repo := newEligibilityMockTaskRepo()
-	activeSession := &ActiveSession{
-		Session: &domain.Session{ID: idgen.MustNew()},
-	}
+	session := &domain.Session{ID: idgen.MustNew()}
+	activeSession := NewActiveSession(session, nil)
 	scheduler := NewScheduler(repo, nil, nil, activeSession, nil)
 
 	predecessorID := idgen.MustNew()
 	predecessor := &domain.Task{
 		ID:        predecessorID,
-		SessionID: activeSession.Session.ID,
+		SessionID: session.ID,
 		Type:      domain.TaskTypeCoding,
 		Status:    domain.TaskStatusProcessing, // Not terminal
 	}
@@ -667,7 +626,7 @@ func TestScheduler_IsTaskEligible_WaitForTerminal(t *testing.T) {
 
 	task := &domain.Task{
 		ID:        idgen.MustNew(),
-		SessionID: activeSession.Session.ID,
+		SessionID: session.ID,
 		Type:      domain.TaskTypeCoding,
 		Status:    domain.TaskStatusPending,
 		DependsOn: domain.NewNullString(predecessorID),
@@ -694,15 +653,14 @@ func TestScheduler_IsTaskEligible_WaitForTerminal(t *testing.T) {
 // a specific condition only become eligible when the predecessor matches.
 func TestScheduler_IsTaskEligible_WithCondition(t *testing.T) {
 	repo := newEligibilityMockTaskRepo()
-	activeSession := &ActiveSession{
-		Session: &domain.Session{ID: idgen.MustNew()},
-	}
+	session := &domain.Session{ID: idgen.MustNew()}
+	activeSession := NewActiveSession(session, nil)
 	scheduler := NewScheduler(repo, nil, nil, activeSession, nil)
 
 	predecessorID := idgen.MustNew()
 	predecessor := &domain.Task{
 		ID:        predecessorID,
-		SessionID: activeSession.Session.ID,
+		SessionID: session.ID,
 		Type:      domain.TaskTypeConfirmation,
 		Status:    domain.TaskStatusSuccess, // Terminal, but not Failure
 	}
@@ -711,7 +669,7 @@ func TestScheduler_IsTaskEligible_WithCondition(t *testing.T) {
 	// Task requires predecessor to be Failure (condition=4).
 	task := &domain.Task{
 		ID:        idgen.MustNew(),
-		SessionID: activeSession.Session.ID,
+		SessionID: session.ID,
 		Type:      domain.TaskTypeCoding,
 		Status:    domain.TaskStatusPending,
 		DependsOn: domain.NewNullString(predecessorID),
@@ -737,15 +695,14 @@ func TestScheduler_IsTaskEligible_WithCondition(t *testing.T) {
 // TestScheduler_IsTaskEligible_ConditionSuccess verifies routing based on Success condition.
 func TestScheduler_IsTaskEligible_ConditionSuccess(t *testing.T) {
 	repo := newEligibilityMockTaskRepo()
-	activeSession := &ActiveSession{
-		Session: &domain.Session{ID: idgen.MustNew()},
-	}
+	session := &domain.Session{ID: idgen.MustNew()}
+	activeSession := NewActiveSession(session, nil)
 	scheduler := NewScheduler(repo, nil, nil, activeSession, nil)
 
 	predecessorID := idgen.MustNew()
 	predecessor := &domain.Task{
 		ID:        predecessorID,
-		SessionID: activeSession.Session.ID,
+		SessionID: session.ID,
 		Type:      domain.TaskTypeConfirmation,
 		Status:    domain.TaskStatusSuccess,
 	}
@@ -754,7 +711,7 @@ func TestScheduler_IsTaskEligible_ConditionSuccess(t *testing.T) {
 	// Task requires predecessor to be Success (condition=3).
 	taskOnSuccess := &domain.Task{
 		ID:        idgen.MustNew(),
-		SessionID: activeSession.Session.ID,
+		SessionID: session.ID,
 		Type:      domain.TaskTypeCoding,
 		Status:    domain.TaskStatusPending,
 		DependsOn: domain.NewNullString(predecessorID),
@@ -764,7 +721,7 @@ func TestScheduler_IsTaskEligible_ConditionSuccess(t *testing.T) {
 	// Task requires predecessor to be Failure (condition=4).
 	taskOnFailure := &domain.Task{
 		ID:        idgen.MustNew(),
-		SessionID: activeSession.Session.ID,
+		SessionID: session.ID,
 		Type:      domain.TaskTypeCoding,
 		Status:    domain.TaskStatusPending,
 		DependsOn: domain.NewNullString(predecessorID),
@@ -788,15 +745,14 @@ func TestScheduler_IsTaskEligible_ConditionSuccess(t *testing.T) {
 // the predecessor task doesn't exist.
 func TestScheduler_IsTaskEligible_PredecessorNotFound(t *testing.T) {
 	repo := newEligibilityMockTaskRepo()
-	activeSession := &ActiveSession{
-		Session: &domain.Session{ID: idgen.MustNew()},
-	}
+	session := &domain.Session{ID: idgen.MustNew()}
+	activeSession := NewActiveSession(session, nil)
 	scheduler := NewScheduler(repo, nil, nil, activeSession, nil)
 
 	// Task depends on a non-existent predecessor.
 	task := &domain.Task{
 		ID:        idgen.MustNew(),
-		SessionID: activeSession.Session.ID,
+		SessionID: session.ID,
 		Type:      domain.TaskTypeCoding,
 		Status:    domain.TaskStatusPending,
 		DependsOn: domain.NewNullString("non-existent-task-id"),

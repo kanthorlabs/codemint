@@ -26,15 +26,19 @@ type ActiveSession struct {
 	ClientMode registry.ClientMode
 	// ClientID is a unique identifier for this client instance (format: "{mode}:{uuid}").
 	ClientID string
+
+	// mu protects Session, Project, YoloEnabled, and IsSuspended from concurrent access.
+	// The Heartbeat goroutine reads these while SetSession may write from the main goroutine.
+	mu sync.RWMutex
 	// IsSuspended indicates that another client has taken over this session.
 	// The client can reclaim ownership by typing any input.
-	IsSuspended bool
-	// Project is the active code project. Always non-nil after bootstrap.
-	Project *domain.Project
-	// Session is the active execution session. Always non-nil after bootstrap.
-	Session *domain.Session
-	// YoloEnabled mirrors Project.YoloMode for quick access.
-	YoloEnabled bool
+	isSuspended bool
+	// project is the active code project. Always non-nil after bootstrap.
+	project *domain.Project
+	// session is the active execution session. Always non-nil after bootstrap.
+	session *domain.Session
+	// yoloEnabled mirrors Project.YoloMode for quick access.
+	yoloEnabled bool
 	// LastSeenTaskID tracks the last coordination task seen by this client.
 	// Used to show "missed activity" when reclaiming a suspended session.
 	LastSeenTaskID string
@@ -72,7 +76,9 @@ func (a *ActiveSession) GetClientMode() registry.ClientMode { return a.ClientMod
 // GetIsCodeMint satisfies registry.ActiveSessionInfo.
 // Returns true if this is a CodeMint sentinel session (non-project work).
 func (a *ActiveSession) GetIsCodeMint() bool {
-	return a.Project != nil && a.Project.Kind == domain.ProjectKindCodeMint
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.project != nil && a.project.Kind == domain.ProjectKindCodeMint
 }
 
 // IsCodeMintSession returns true if this is a CodeMint sentinel session.
@@ -83,18 +89,22 @@ func (a *ActiveSession) IsCodeMintSession() bool {
 
 // GetSessionID satisfies registry.MutableSessionInfo.
 func (a *ActiveSession) GetSessionID() string {
-	if a.Session == nil {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.session == nil {
 		return ""
 	}
-	return a.Session.ID
+	return a.session.ID
 }
 
 // GetProjectID satisfies registry.MutableSessionInfo.
 func (a *ActiveSession) GetProjectID() string {
-	if a.Project == nil {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.project == nil {
 		return ""
 	}
-	return a.Project.ID
+	return a.project.ID
 }
 
 // GetClientID satisfies registry.MutableSessionInfo.
@@ -103,15 +113,17 @@ func (a *ActiveSession) GetClientID() string { return a.ClientID }
 // SetSession satisfies registry.MutableSessionInfo.
 // It also fires any registered project switch callbacks if the project changes.
 func (a *ActiveSession) SetSession(session any, project any, yoloEnabled bool) {
+	a.mu.Lock()
 	oldProjectID := ""
-	if a.Project != nil {
-		oldProjectID = a.Project.ID
+	if a.project != nil {
+		oldProjectID = a.project.ID
 	}
 
 	if session == nil {
-		a.Session = nil
-		a.Project = nil
-		a.YoloEnabled = false
+		a.session = nil
+		a.project = nil
+		a.yoloEnabled = false
+		a.mu.Unlock()
 
 		// Fire callbacks if project changed.
 		if oldProjectID != "" {
@@ -121,9 +133,10 @@ func (a *ActiveSession) SetSession(session any, project any, yoloEnabled bool) {
 	}
 
 	newProject := project.(*domain.Project)
-	a.Session = session.(*domain.Session)
-	a.Project = newProject
-	a.YoloEnabled = yoloEnabled
+	a.session = session.(*domain.Session)
+	a.project = newProject
+	a.yoloEnabled = yoloEnabled
+	a.mu.Unlock()
 
 	// Fire callbacks if project changed.
 	if oldProjectID != newProject.ID {
@@ -133,7 +146,23 @@ func (a *ActiveSession) SetSession(session any, project any, yoloEnabled bool) {
 
 // SetSuspended satisfies registry.MutableSessionInfo.
 func (a *ActiveSession) SetSuspended(suspended bool) {
-	a.IsSuspended = suspended
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.isSuspended = suspended
+}
+
+// GetSuspended returns whether this session is suspended.
+func (a *ActiveSession) GetSuspended() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.isSuspended
+}
+
+// GetYoloEnabled returns whether YOLO mode is enabled.
+func (a *ActiveSession) GetYoloEnabled() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.yoloEnabled
 }
 
 // SetClientMode satisfies registry.MutableSessionInfo.
@@ -153,12 +182,16 @@ func (a *ActiveSession) ACPRegistry() *acp.Registry {
 
 // GetProject returns the active project, or nil.
 func (a *ActiveSession) GetProject() *domain.Project {
-	return a.Project
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.project
 }
 
 // GetSession returns the active session, or nil.
 func (a *ActiveSession) GetSession() *domain.Session {
-	return a.Session
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.session
 }
 
 // GetACPSessionID returns the ACP session ID.
@@ -266,6 +299,26 @@ func (a *ActiveSession) GetInputSource() (source, userID string) {
 	a.inputSourceMu.RLock()
 	defer a.inputSourceMu.RUnlock()
 	return a.inputSource, a.inputUserID
+}
+
+// NewActiveSession creates a new ActiveSession with the given session and project.
+// This is primarily used for testing; production code typically uses the zero value
+// and calls SetSession to initialize.
+func NewActiveSession(session *domain.Session, project *domain.Project) *ActiveSession {
+	return &ActiveSession{
+		session: session,
+		project: project,
+	}
+}
+
+// NewActiveSessionWithYolo creates a new ActiveSession with YOLO mode enabled.
+// This is primarily used for testing.
+func NewActiveSessionWithYolo(session *domain.Session, project *domain.Project, yoloEnabled bool) *ActiveSession {
+	return &ActiveSession{
+		session:     session,
+		project:     project,
+		yoloEnabled: yoloEnabled,
+	}
 }
 
 // Compile-time assertion: *ActiveSession must satisfy registry.ActiveSessionInfo.

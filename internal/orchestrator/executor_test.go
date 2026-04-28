@@ -7,7 +7,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -140,78 +139,6 @@ func (m *mockUI) PromptDecision(_ context.Context, req registry.PromptRequest) r
 	m.promptRequestCalled = true
 	m.lastPromptRequest = req
 	return m.promptResponse
-}
-
-// --- ACP Mocks for Task 3.15 Tests ---
-
-// mockWorker simulates an ACP worker for testing.
-type mockWorker struct {
-	mu            sync.Mutex
-	sentMessages  []*acp.Message
-	currentTaskID string
-	alive         bool
-}
-
-func newMockWorker() *mockWorker {
-	return &mockWorker{
-		sentMessages: make([]*acp.Message, 0),
-		alive:        true,
-	}
-}
-
-func (m *mockWorker) Send(msg *acp.Message) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.sentMessages = append(m.sentMessages, msg)
-	return nil
-}
-
-func (m *mockWorker) SetCurrentTask(taskID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.currentTaskID = taskID
-}
-
-func (m *mockWorker) CurrentTaskID() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.currentTaskID
-}
-
-func (m *mockWorker) Alive() bool {
-	return m.alive
-}
-
-func (m *mockWorker) GetSentMessages() []*acp.Message {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	result := make([]*acp.Message, len(m.sentMessages))
-	copy(result, m.sentMessages)
-	return result
-}
-
-// mockACPRegistry simulates the ACP registry for testing.
-type mockACPRegistry struct {
-	workers map[string]*mockWorker
-}
-
-func newMockACPRegistry() *mockACPRegistry {
-	return &mockACPRegistry{
-		workers: make(map[string]*mockWorker),
-	}
-}
-
-func (m *mockACPRegistry) Get(sessionID string) (*acp.Worker, bool) {
-	// This doesn't return the real *acp.Worker, we need a different approach.
-	// Since we can't mock *acp.Worker directly (it's a concrete type),
-	// we'll need to test at a higher level or use integration tests.
-	return nil, false
-}
-
-func (m *mockACPRegistry) AddMockWorker(sessionID string) *mockWorker {
-	worker := newMockWorker()
-	m.workers[sessionID] = worker
-	return worker
 }
 
 // mockPermissionRepo implements repository.ProjectPermissionRepository for testing.
@@ -425,9 +352,7 @@ func TestExecutor_Verification_PassesOnZeroExit(t *testing.T) {
 		Runner:   NewLocalRunner(),
 	})
 
-	sess := &ActiveSession{
-		Project: &domain.Project{WorkingDir: "/tmp"},
-	}
+	sess := NewActiveSession(nil, &domain.Project{WorkingDir: "/tmp"})
 
 	input := VerificationInputSchema{
 		Command: "true", // Shell true command - exits 0
@@ -471,9 +396,7 @@ func TestExecutor_Verification_FailsOnNonZeroExit(t *testing.T) {
 		Runner:   NewLocalRunner(),
 	})
 
-	sess := &ActiveSession{
-		Project: &domain.Project{WorkingDir: "/tmp"},
-	}
+	sess := NewActiveSession(nil, &domain.Project{WorkingDir: "/tmp"})
 
 	input := VerificationInputSchema{
 		Command: "false", // Shell false command - exits 1
@@ -1179,13 +1102,13 @@ func TestExecutor_Coding_BuildsTypedParams(t *testing.T) {
 	})
 
 	// Create session with runtime
-	sess := &ActiveSession{
-		Project: &domain.Project{
+	sess := NewActiveSession(
+		&domain.Session{ID: sessionID},
+		&domain.Project{
 			ID:         "test-project",
 			WorkingDir: tmpDir,
 		},
-		Session: &domain.Session{ID: sessionID},
-	}
+	)
 	sess.SetACPRuntime(runtime)
 	sess.SetACPSessionID("acp-session-123")
 
@@ -1282,13 +1205,13 @@ func TestExecutor_Coding_PathEscapeFailsGracefully(t *testing.T) {
 		UI:       ui,
 	})
 
-	sess := &ActiveSession{
-		Project: &domain.Project{
+	sess := NewActiveSession(
+		&domain.Session{ID: sessionID},
+		&domain.Project{
 			ID:         "test-project",
 			WorkingDir: tmpDir,
 		},
-		Session: &domain.Session{ID: sessionID},
-	}
+	)
 	sess.SetACPRuntime(runtime)
 	sess.SetACPSessionID("acp-session-123")
 
@@ -1359,13 +1282,13 @@ func TestExecutor_Coding_MissingContextFileFailsGracefully(t *testing.T) {
 		UI:       ui,
 	})
 
-	sess := &ActiveSession{
-		Project: &domain.Project{
+	sess := NewActiveSession(
+		&domain.Session{ID: sessionID},
+		&domain.Project{
 			ID:         "test-project",
 			WorkingDir: tmpDir,
 		},
-		Session: &domain.Session{ID: sessionID},
-	}
+	)
 	sess.SetACPRuntime(runtime)
 	sess.SetACPSessionID("acp-session-123")
 
@@ -1421,13 +1344,13 @@ func TestExecutor_Coding_EmptyInputFailsGracefully(t *testing.T) {
 		UI:       ui,
 	})
 
-	sess := &ActiveSession{
-		Project: &domain.Project{
+	sess := NewActiveSession(
+		&domain.Session{ID: sessionID},
+		&domain.Project{
 			ID:         "test-project",
 			WorkingDir: "/tmp",
 		},
-		Session: &domain.Session{ID: sessionID},
-	}
+	)
 	sess.SetACPRuntime(runtime)
 	sess.SetACPSessionID("acp-session-123")
 
@@ -1812,13 +1735,13 @@ func TestExecutor_Coding_InjectsSkillBody(t *testing.T) {
 		Skills:   skillResolver,
 	})
 
-	sess := &ActiveSession{
-		Project: &domain.Project{
+	sess := NewActiveSession(
+		&domain.Session{ID: sessionID},
+		&domain.Project{
 			ID:         "test-project",
 			WorkingDir: tmpDir,
 		},
-		Session: &domain.Session{ID: sessionID},
-	}
+	)
 	sess.SetACPRuntime(runtime)
 	sess.SetACPSessionID("acp-session-123")
 
@@ -1908,13 +1831,13 @@ func TestExecutor_Coding_NoSkill_PreservesExistingBehavior(t *testing.T) {
 		UI:       ui,
 	})
 
-	sess := &ActiveSession{
-		Project: &domain.Project{
+	sess := NewActiveSession(
+		&domain.Session{ID: sessionID},
+		&domain.Project{
 			ID:         "test-project",
 			WorkingDir: tmpDir,
 		},
-		Session: &domain.Session{ID: sessionID},
-	}
+	)
 	sess.SetACPRuntime(runtime)
 	sess.SetACPSessionID("acp-session-123")
 
@@ -1987,13 +1910,13 @@ func TestExecutor_Coding_SkillNotFound_FailsGracefully(t *testing.T) {
 		Skills:   skillResolver,
 	})
 
-	sess := &ActiveSession{
-		Project: &domain.Project{
+	sess := NewActiveSession(
+		&domain.Session{ID: sessionID},
+		&domain.Project{
 			ID:         "test-project",
 			WorkingDir: tmpDir,
 		},
-		Session: &domain.Session{ID: sessionID},
-	}
+	)
 	sess.SetACPRuntime(runtime)
 	sess.SetACPSessionID("acp-session-123")
 
@@ -2067,13 +1990,13 @@ func TestExecutor_Coding_SkillEmptyBody_FailsGracefully(t *testing.T) {
 		Skills:   skillResolver,
 	})
 
-	sess := &ActiveSession{
-		Project: &domain.Project{
+	sess := NewActiveSession(
+		&domain.Session{ID: sessionID},
+		&domain.Project{
 			ID:         "test-project",
 			WorkingDir: tmpDir,
 		},
-		Session: &domain.Session{ID: sessionID},
-	}
+	)
 	sess.SetACPRuntime(runtime)
 	sess.SetACPSessionID("acp-session-123")
 

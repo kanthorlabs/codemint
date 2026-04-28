@@ -172,7 +172,7 @@ func TestReadHotMemoryFile(t *testing.T) {
 		if err := os.WriteFile(filePath, []byte("test"), 0o000); err != nil {
 			t.Fatal(err)
 		}
-		defer os.Chmod(filePath, 0o644) // Cleanup
+		defer func() { _ = os.Chmod(filePath, 0o644) }() // Cleanup
 
 		_, err := readHotMemoryFile(filePath)
 		if err == nil {

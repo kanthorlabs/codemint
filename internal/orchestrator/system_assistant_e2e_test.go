@@ -55,10 +55,8 @@ func TestInputMultiplexer_CrossInterfaceLoop(t *testing.T) {
 	dispatcher := NewDispatcher(cmdRegistry, mockUI, assistant, nil)
 
 	// Create active session with CodeMint project.
-	active := &ActiveSession{
-		ClientMode: registry.ClientModeHybrid,
-		Project:    &domain.Project{Kind: domain.ProjectKindCodeMint},
-	}
+	active := NewActiveSession(nil, &domain.Project{Kind: domain.ProjectKindCodeMint})
+	active.ClientMode = registry.ClientModeHybrid
 
 	// Register both TUI and CUI sources.
 	tuiCh := mux.RegisterSource("tui", 16)
@@ -162,10 +160,8 @@ func TestInputMultiplexer_SourceAttribution(t *testing.T) {
 	ctx := context.Background()
 
 	// Create active session with CodeMint project.
-	active := &ActiveSession{
-		ClientMode: registry.ClientModeHybrid,
-		Project:    &domain.Project{Kind: domain.ProjectKindCodeMint},
-	}
+	active := NewActiveSession(nil, &domain.Project{Kind: domain.ProjectKindCodeMint})
+	active.ClientMode = registry.ClientModeHybrid
 
 	// Test SetInputSource and GetInputSource.
 	active.SetInputSource("cui-telegram", "user123")

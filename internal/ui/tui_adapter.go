@@ -530,15 +530,8 @@ func (t *TUIAdapter) writeLineLocked(line string) {
 		return
 	}
 	if t.writer != nil {
-		t.writer.Write([]byte(line + "\n"))
+		_, _ = t.writer.Write([]byte(line + "\n"))
 	}
-}
-
-// writeRaw writes raw text without newline (for streaming).
-func (t *TUIAdapter) writeRaw(text string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.writeRawLocked(text)
 }
 
 // writeRawLocked writes raw text without acquiring lock.
@@ -548,7 +541,7 @@ func (t *TUIAdapter) writeRawLocked(text string) {
 		return
 	}
 	if t.writer != nil {
-		t.writer.Write([]byte(text))
+		_, _ = t.writer.Write([]byte(text))
 	}
 }
 
@@ -557,7 +550,7 @@ func (t *TUIAdapter) flushRenderBuffer() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.renderBuffer.Len() > 0 && t.writer != nil {
-		t.writer.Write([]byte(t.renderBuffer.String()))
+		_, _ = t.writer.Write([]byte(t.renderBuffer.String()))
 		t.renderBuffer.Reset()
 	}
 }

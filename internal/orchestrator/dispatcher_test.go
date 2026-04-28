@@ -54,18 +54,16 @@ func newTestRegistry(captureArgs *[]string, captureRaw *string) *registry.Comman
 
 // cliSession returns an ActiveSession in CLI mode with a CodeMint project for test convenience.
 func cliSession() *ActiveSession {
-	return &ActiveSession{
-		ClientMode: registry.ClientModeCLI,
-		Project:    &domain.Project{Kind: domain.ProjectKindCodeMint},
-	}
+	active := NewActiveSession(nil, &domain.Project{Kind: domain.ProjectKindCodeMint})
+	active.ClientMode = registry.ClientModeCLI
+	return active
 }
 
 // daemonSession returns an ActiveSession in Daemon mode with a CodeMint project for test convenience.
 func daemonSession() *ActiveSession {
-	return &ActiveSession{
-		ClientMode: registry.ClientModeDaemon,
-		Project:    &domain.Project{Kind: domain.ProjectKindCodeMint},
-	}
+	active := NewActiveSession(nil, &domain.Project{Kind: domain.ProjectKindCodeMint})
+	active.ClientMode = registry.ClientModeDaemon
+	return active
 }
 
 // --- Test A: Strict Parse ---
@@ -280,10 +278,8 @@ func TestDispatch_NaturalLanguage_GlobalSession_NilAssistant_FriendlyError(t *te
 func TestDispatch_NaturalLanguage_CodingSession_ReturnsBrainstormerError(t *testing.T) {
 	r := registry.NewCommandRegistry()
 	d := NewDispatcher(r, noopUI{}, nil, nil)
-	active := &ActiveSession{
-		ClientMode: registry.ClientModeCLI,
-		Project:    &domain.Project{Kind: domain.ProjectKindCoding},
-	}
+	active := NewActiveSession(nil, &domain.Project{Kind: domain.ProjectKindCoding})
+	active.ClientMode = registry.ClientModeCLI
 
 	err := d.Dispatch(context.Background(), active, "add a login endpoint")
 	if err == nil {

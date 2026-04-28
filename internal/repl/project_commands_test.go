@@ -281,8 +281,8 @@ func TestProjectList_ShowsProjects(t *testing.T) {
 	// Create projects.
 	p1 := domain.NewProject("project-a", "/path/a", domain.ProjectKindCoding)
 	p2 := domain.NewProject("project-b", "/path/b", domain.ProjectKindCodeMint)
-	projectRepo.Create(ctx, p1)
-	projectRepo.Create(ctx, p2)
+	_ = projectRepo.Create(ctx, p1)
+	_ = projectRepo.Create(ctx, p2)
 
 	deps := &ProjectCommandDeps{
 		ProjectRepo: projectRepo,
@@ -378,7 +378,7 @@ func TestProjectAssistant_ShowsCurrentBinding(t *testing.T) {
 
 	// Create a project.
 	project := domain.NewProject("test-project", "/path/test", domain.ProjectKindCoding)
-	projectRepo.Create(ctx, project)
+	_ = projectRepo.Create(ctx, project)
 
 	activeSession := &mockMutableSession{projectID: project.ID}
 
@@ -417,7 +417,7 @@ func TestProjectAssistant_SetProvider(t *testing.T) {
 
 	// Create a project.
 	project := domain.NewProject("test-project", "/path/test", domain.ProjectKindCoding)
-	projectRepo.Create(ctx, project)
+	_ = projectRepo.Create(ctx, project)
 
 	activeSession := &mockMutableSession{projectID: project.ID}
 	providerRegistry := &mockProviderRegistry{names: []string{"opencode", "codex", "claude-code"}}
@@ -461,8 +461,8 @@ func TestProjectAssistant_ResetProvider(t *testing.T) {
 
 	// Create a project with provider set.
 	project := domain.NewProject("test-project", "/path/test", domain.ProjectKindCoding)
-	projectRepo.Create(ctx, project)
-	projectRepo.UpdateAssistantBinding(ctx, project.ID, "codex", "")
+	_ = projectRepo.Create(ctx, project)
+	_ = projectRepo.UpdateAssistantBinding(ctx, project.ID, "codex", "")
 
 	activeSession := &mockMutableSession{projectID: project.ID}
 
@@ -504,7 +504,7 @@ func TestProjectAssistant_CodeMintProjectNotSupported(t *testing.T) {
 
 	// Create a CodeMint project.
 	project := domain.NewProject("codemint", "/path/codemint", domain.ProjectKindCodeMint)
-	projectRepo.Create(ctx, project)
+	_ = projectRepo.Create(ctx, project)
 
 	activeSession := &mockMutableSession{projectID: project.ID}
 
@@ -540,7 +540,7 @@ func TestProjectAssistant_UnknownProvider(t *testing.T) {
 
 	// Create a project.
 	project := domain.NewProject("test-project", "/path/test", domain.ProjectKindCoding)
-	projectRepo.Create(ctx, project)
+	_ = projectRepo.Create(ctx, project)
 
 	activeSession := &mockMutableSession{projectID: project.ID}
 	providerRegistry := &mockProviderRegistry{names: []string{"opencode", "codex"}}

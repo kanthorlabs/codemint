@@ -148,10 +148,8 @@ func projectOpenHandler(deps *ProjectCommandDeps) registry.Handler {
 
 			// Create default permission row (all NULL = no restrictions).
 			perm := &domain.ProjectPermission{ProjectID: project.ID}
-			if err := deps.PermissionRepo.Upsert(ctx, perm); err != nil {
-				// Non-fatal: permission will be permissive by default.
-				// Log but continue.
-			}
+			// Non-fatal: permission will be permissive by default if upsert fails.
+			_ = deps.PermissionRepo.Upsert(ctx, perm)
 		}
 
 		// Find or create active session for this project.

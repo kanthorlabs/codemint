@@ -148,9 +148,9 @@ func isUniqueConstraintError(err error) bool {
 		return false
 	}
 	// modernc.org/sqlite returns error messages containing "UNIQUE constraint failed"
-	return errors.Is(err, sql.ErrNoRows) == false && 
+	return !errors.Is(err, sql.ErrNoRows) &&
 		(contains(err.Error(), "UNIQUE constraint failed") ||
-		 contains(err.Error(), "constraint failed: UNIQUE"))
+			contains(err.Error(), "constraint failed: UNIQUE"))
 }
 
 // contains is a simple substring check helper.

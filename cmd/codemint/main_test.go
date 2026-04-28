@@ -90,14 +90,15 @@ func TestREPLExitCommand(t *testing.T) {
 	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil, nil)
 
 	// Create active session with a test project.
-	activeSession := &orchestrator.ActiveSession{
-		ClientMode: registry.ClientModeCLI,
-		Project: &domain.Project{
+	activeSession := orchestrator.NewActiveSession(
+		nil,
+		&domain.Project{
 			ID:   "proj-test",
 			Name: "Test Project",
 			Kind: domain.ProjectKindCodeMint,
 		},
-	}
+	)
+	activeSession.ClientMode = registry.ClientModeCLI
 
 	// Create dispatcher wrapper.
 	wrapper := &dispatcherWrapper{
@@ -163,14 +164,15 @@ func TestREPLHelpCommand(t *testing.T) {
 	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil, nil)
 
 	// Create active session with a test project.
-	activeSession := &orchestrator.ActiveSession{
-		ClientMode: registry.ClientModeCLI,
-		Project: &domain.Project{
+	activeSession := orchestrator.NewActiveSession(
+		nil,
+		&domain.Project{
 			ID:   "proj-test",
 			Name: "Test Project",
 			Kind: domain.ProjectKindCodeMint,
 		},
-	}
+	)
+	activeSession.ClientMode = registry.ClientModeCLI
 
 	// Create dispatcher wrapper.
 	wrapper := &dispatcherWrapper{
@@ -240,14 +242,15 @@ func TestREPLContextCancellation(t *testing.T) {
 	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, nil, nil)
 
 	// Create active session with a test project.
-	activeSession := &orchestrator.ActiveSession{
-		ClientMode: registry.ClientModeCLI,
-		Project: &domain.Project{
+	activeSession := orchestrator.NewActiveSession(
+		nil,
+		&domain.Project{
 			ID:   "proj-test",
 			Name: "Test Project",
 			Kind: domain.ProjectKindCodeMint,
 		},
-	}
+	)
+	activeSession.ClientMode = registry.ClientModeCLI
 
 	// Create dispatcher wrapper.
 	wrapper := &dispatcherWrapper{

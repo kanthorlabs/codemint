@@ -47,14 +47,15 @@ func (h *Heartbeat) Start(ctx context.Context) {
 // tick updates the session's last_activity_at timestamp.
 func (h *Heartbeat) tick(ctx context.Context) {
 	// Only tick if we have an active session and are not suspended.
-	if h.activeSession.Session == nil || h.activeSession.IsSuspended {
+	session := h.activeSession.GetSession()
+	if session == nil || h.activeSession.GetSuspended() {
 		return
 	}
 
 	now := time.Now().Unix()
 	err := h.sessionRepo.SaveState(
 		ctx,
-		h.activeSession.Session.ID,
+		session.ID,
 		h.activeSession.ClientID,
 		now,
 	)
@@ -65,8 +66,11 @@ func (h *Heartbeat) tick(ctx context.Context) {
 	}
 
 	// Update the in-memory session state.
-	h.activeSession.Session.LastActivityAt.Int64 = now
-	h.activeSession.Session.LastActivityAt.Valid = true
+	// Note: This is a benign race - the session object itself is not replaced,
+	// only its LastActivityAt field is updated. This is acceptable since
+	// LastActivityAt is only used for display/debugging purposes.
+	session.LastActivityAt.Int64 = now
+	session.LastActivityAt.Valid = true
 }
 
 // TouchActivity updates the session's last_activity_at immediately.

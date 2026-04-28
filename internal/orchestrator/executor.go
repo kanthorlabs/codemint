@@ -400,7 +400,7 @@ func (e *Executor) executeCoding(ctx context.Context, sess *ActiveSession, task 
 	// 5c. Resolve context files relative to project working directory.
 
 	if len(taskInput.ContextFiles) > 0 {
-		resolvedPaths, err := resolveContextFiles(sess.Project, taskInput.ContextFiles)
+		resolvedPaths, err := resolveContextFiles(sess.GetProject(), taskInput.ContextFiles)
 		if err != nil {
 			// Map error to appropriate sentinel.
 			var sentinel string
@@ -528,8 +528,11 @@ func (e *Executor) executeVerification(ctx context.Context, sess *ActiveSession,
 
 	// Use project working directory if not specified.
 	cwd := input.Cwd
-	if cwd == "" && sess != nil && sess.Project != nil {
-		cwd = sess.Project.WorkingDir
+	if cwd == "" && sess != nil {
+		project := sess.GetProject()
+		if project != nil {
+			cwd = project.WorkingDir
+		}
 	}
 
 	// 2. Check if command is whitelisted.
@@ -653,12 +656,6 @@ func (e *Executor) executeConfirmation(ctx context.Context, sess *ActiveSession,
 			"task_id", task.ID,
 			"error", err,
 		)
-	}
-
-	// Update session status to Awaiting if sessionRepo is available.
-	if e.sessionRepo != nil && sess != nil && sess.Session != nil {
-		// Note: SessionRepository may not have UpdateStatus; skip for now.
-		// This would require adding UpdateStatus to the SessionRepository interface.
 	}
 
 	// 2. Parse task input for prompt body.

@@ -80,10 +80,16 @@ func (d *Dispatcher) WorkflowRegistry() *workflow.WorkflowRegistry {
 //   - natural language + CodeMint session → delegates to systemAssistant.
 //   - natural language + Coding session → placeholder for EPIC-02 Brainstormer.
 func (d *Dispatcher) Dispatch(ctx context.Context, active *ActiveSession, input string) error {
+	project := active.GetProject()
+	projectKind := domain.ProjectKindCodeMint
+	if project != nil {
+		projectKind = project.Kind
+	}
+
 	slog.Info("dispatcher: received input",
 		"input", input,
 		"project_id", active.GetProjectID(),
-		"project_kind", active.Project.Kind,
+		"project_kind", projectKind,
 		"is_codemint", active.IsCodeMintSession(),
 	)
 
@@ -102,7 +108,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, active *ActiveSession, input 
 			result := d.exitOnDispatcher.Dispatch(ctx, cmdWithSlash, sessionID)
 			if result.Handled {
 				// Command was handled by exit_on dispatcher.
-				msg := fmt.Sprintf("Goal locked and workflow advanced.")
+				msg := "Goal locked and workflow advanced."
 				if result.Error != nil {
 					msg = fmt.Sprintf("Handler error: %v", result.Error)
 				}
@@ -158,16 +164,16 @@ func (d *Dispatcher) Dispatch(ctx context.Context, active *ActiveSession, input 
 
 	// Natural-language path: route based on project kind.
 	slog.Info("dispatcher: routing natural language",
-		"project_kind", active.Project.Kind,
+		"project_kind", projectKind,
 		"is_codemint", active.IsCodeMintSession(),
 		"raw_args", rawArgs,
 	)
 
 	switch {
-	case active.Project != nil && active.Project.Kind == domain.ProjectKindCodeMint:
+	case project != nil && project.Kind == domain.ProjectKindCodeMint:
 		slog.Info("dispatcher: routing to system assistant")
 		return d.dispatchToSystemAssistant(ctx, active, rawArgs)
-	case active.Project != nil && active.Project.Kind == domain.ProjectKindCoding:
+	case project != nil && project.Kind == domain.ProjectKindCoding:
 		// Coding session: use workflow registry to route if available.
 		if d.workflowRegistry != nil {
 			if def, found := d.workflowRegistry.FindByTrigger(rawArgs); found {
@@ -184,7 +190,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, active *ActiveSession, input 
 		// Fallback: hand off to Brainstormer placeholder (EPIC-02).
 		return fmt.Errorf("%w: input=%q", ErrNoBrainstormer, rawArgs)
 	default:
-		return fmt.Errorf("dispatcher: unsupported project kind %q", active.Project.Kind)
+		return fmt.Errorf("dispatcher: unsupported project kind %q", projectKind)
 	}
 }
 
@@ -206,14 +212,15 @@ func (d *Dispatcher) dispatchToSystemAssistant(ctx context.Context, active *Acti
 
 	// Build the assistant session from ActiveSession.
 	sess := agent.AssistantSession{
-		Session:     active.Session,
-		Project:     active.Project,
+		Session:     active.GetSession(),
+		Project:     active.GetProject(),
 		IsCodeMint:  active.IsCodeMintSession(),
 	}
 
+	session := active.GetSession()
 	var sessionID string
-	if active.Session != nil {
-		sessionID = active.Session.ID
+	if session != nil {
+		sessionID = session.ID
 	}
 	slog.Info("dispatcher: calling system assistant Ask",
 		"session_id", sessionID,
@@ -295,7 +302,7 @@ func (d *Dispatcher) DispatchInbound(ctx context.Context, active *ActiveSession,
 func (d *Dispatcher) recordInteraction(ctx context.Context, active *ActiveSession, input string, isSlash bool, cmdName string, response string, err error) {
 	if d.interactionRecorder != nil {
 		source, userID := active.GetInputSource()
-		d.interactionRecorder.RecordWithSource(ctx, active, input, isSlash, cmdName, response, source, userID, err)
+		_ = d.interactionRecorder.RecordWithSource(ctx, active, input, isSlash, cmdName, response, source, userID, err)
 	}
 }
 
@@ -303,7 +310,7 @@ func (d *Dispatcher) recordInteraction(ctx context.Context, active *ActiveSessio
 func (d *Dispatcher) recordChat(ctx context.Context, active *ActiveSession, userText string, assistantText string, err error) {
 	if d.interactionRecorder != nil {
 		source, userID := active.GetInputSource()
-		d.interactionRecorder.RecordChatWithSource(ctx, active, userText, assistantText, source, userID, err)
+		_ = d.interactionRecorder.RecordChatWithSource(ctx, active, userText, assistantText, source, userID, err)
 	}
 }
 

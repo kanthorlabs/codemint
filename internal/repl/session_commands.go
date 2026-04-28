@@ -165,10 +165,9 @@ func switchToSession(ctx context.Context, deps *SessionCommandDeps, sessionID st
 	}
 
 	// Clear ownership on current session (if any).
+	// Non-fatal: best effort cleanup.
 	if currentSessionID != "" {
-		if err := deps.SessionRepo.ClearOwnership(ctx, currentSessionID); err != nil {
-			// Log but don't fail - best effort.
-		}
+		_ = deps.SessionRepo.ClearOwnership(ctx, currentSessionID)
 	}
 
 	// Take ownership of the new session.

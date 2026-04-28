@@ -163,7 +163,6 @@ func (g *TaskGenerator) GenerateTasksWithGuardrails(wf *domain.WorkflowFile, cfg
 				confirmTask := g.createConfirmationTask(cfg, epicIdx+1, storyIdx+1, seqTask, lastTask)
 				tasks = append(tasks, confirmTask)
 				lastTask = confirmTask
-				seqTask++
 			}
 
 			storyLastTaskMap[story.ID] = lastTask
