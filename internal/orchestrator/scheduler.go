@@ -180,8 +180,8 @@ func (s *Scheduler) ProcessNextTask(ctx context.Context) (*domain.Task, error) {
 	// Set the current task ID on the worker for StatusMapper (Story 3.7).
 	s.setCurrentTaskOnWorker(task.ID)
 
-	// Hand off to the executor.
-	if err := s.executor.ExecuteTask(ctx, task); err != nil {
+	// Hand off to the executor with task-type routing.
+	if err := s.executor.Execute(ctx, s.activeSession, task); err != nil {
 		// Clear the current task on error.
 		s.setCurrentTaskOnWorker("")
 		return task, err

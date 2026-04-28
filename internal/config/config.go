@@ -7,6 +7,11 @@ package config
 // This assistant must always be configured and seeded in the database.
 const SysDefaultAssistant = "sys-default"
 
+// SysCodingAssistant is the canonical name for the coding assistant.
+// This assistant is used for executing coding tasks via the Executor.
+// If not configured, falls back to sys-default.
+const SysCodingAssistant = "sys-coding"
+
 // Config is the root configuration structure for CodeMint.
 type Config struct {
 	Workflows  []WorkflowConfig           `yaml:"workflows" validate:"dive"`
@@ -64,4 +69,16 @@ func (c *Config) GetAssistant(name string) AssistantConfig {
 // This is the primary assistant used for workflow task execution.
 func (c *Config) GetSysDefault() AssistantConfig {
 	return c.GetAssistant(SysDefaultAssistant)
+}
+
+// GetSysCoding returns the sys-coding assistant configuration.
+// This assistant is used for executing coding tasks.
+// If not configured, falls back to sys-default configuration.
+func (c *Config) GetSysCoding() AssistantConfig {
+	cfg := c.GetAssistant(SysCodingAssistant)
+	if cfg.Provider == "" {
+		// Fallback to sys-default if sys-coding is not configured.
+		return c.GetSysDefault()
+	}
+	return cfg
 }

@@ -41,19 +41,14 @@ func (m *mockSkillResolver) AddSkill(id string, instruction string) {
 	}
 }
 
-type mockCodingAgent struct {
-	executeErr error
-}
-
-func (m *mockCodingAgent) ExecuteTask(_ context.Context, _ *domain.Task) error {
-	return m.executeErr
-}
+type mockCodingAgent struct{}
 
 func (m *mockCodingAgent) Accept(_ context.Context, _ *domain.Task) error { return nil }
 func (m *mockCodingAgent) Revert(_ context.Context, _ *domain.Task) error { return nil }
 
 type mockTaskRepo struct {
 	updateStatusCalls    []domain.TaskStatus
+	claimCalled          bool
 	updateAssigneeCalled bool
 	newAssigneeID        string
 	findByIDTask         *domain.Task
@@ -61,7 +56,11 @@ type mockTaskRepo struct {
 }
 
 func (m *mockTaskRepo) Next(_ context.Context, _ string) (*domain.Task, error) { return nil, nil }
-func (m *mockTaskRepo) Claim(_ context.Context, _ string) error                { return nil }
+func (m *mockTaskRepo) Claim(_ context.Context, _ string) error {
+	m.claimCalled = true
+	m.updateStatusCalls = append(m.updateStatusCalls, domain.TaskStatusProcessing)
+	return nil
+}
 func (m *mockTaskRepo) UpdateStatus(_ context.Context, _ string, _ domain.TaskStatus, _ string) error {
 	return nil
 }
@@ -174,86 +173,6 @@ func (m *mockSessionRepo) GetMostRecentActive(_ context.Context) (*domain.Sessio
 }
 func (m *mockSessionRepo) CountActiveByProjectID(_ context.Context, _ string) (int, error) {
 	return 0, nil
-}
-
-// --- Legacy Tests ---
-
-// TestExecuteTask_HappyPath asserts that a successful agent execution returns
-// no error and does not trigger the crash-fallback flow.
-func TestExecuteTask_HappyPath(t *testing.T) {
-	humanID := idgen.MustNew()
-	ag := &mockCodingAgent{}
-	repo := &mockTaskRepo{}
-	agentRepo := &mockAgentRepo{human: &domain.Agent{ID: humanID, Name: "human"}}
-	ui := &mockUI{}
-
-	executor := NewExecutor(ag, repo, agentRepo, ui)
-	task := &domain.Task{
-		ID:      idgen.MustNew(),
-		Timeout: domain.DefaultTaskTimeout,
-		Status:  domain.TaskStatusProcessing,
-	}
-
-	if err := executor.ExecuteTask(context.Background(), task); err != nil {
-		t.Fatalf("ExecuteTask returned unexpected error: %v", err)
-	}
-	if repo.updateAssigneeCalled {
-		t.Error("UpdateAssignee must not be called on success")
-	}
-	if len(repo.updateStatusCalls) != 0 {
-		t.Errorf("UpdateTaskStatus must not be called on success, got %d calls", len(repo.updateStatusCalls))
-	}
-	if ui.lastMessage != "" {
-		t.Error("UI must not be notified on success")
-	}
-}
-
-// TestExecuteTask_AgentCrash asserts that when the agent returns an error:
-//  1. The task is reassigned to the human agent.
-//  2. Status transitions: Failure → Awaiting.
-//  3. The UI renders CrashMessage.
-func TestExecuteTask_AgentCrash(t *testing.T) {
-	humanID := idgen.MustNew()
-	ag := &mockCodingAgent{executeErr: errors.New("agent panic")}
-	repo := &mockTaskRepo{}
-	agentRepo := &mockAgentRepo{human: &domain.Agent{ID: humanID, Name: "human"}}
-	ui := &mockUI{}
-
-	executor := NewExecutor(ag, repo, agentRepo, ui)
-	task := &domain.Task{
-		ID:      idgen.MustNew(),
-		Timeout: domain.DefaultTaskTimeout,
-		Status:  domain.TaskStatusProcessing,
-	}
-
-	err := executor.ExecuteTask(context.Background(), task)
-	if err == nil {
-		t.Fatal("ExecuteTask must return an error on agent crash")
-	}
-
-	// Reassignment to human.
-	if !repo.updateAssigneeCalled {
-		t.Error("UpdateAssignee must be called to reassign to human")
-	}
-	if repo.newAssigneeID != humanID {
-		t.Errorf("expected reassignment to human %q, got %q", humanID, repo.newAssigneeID)
-	}
-
-	// Status sequence: Failure then Awaiting.
-	if len(repo.updateStatusCalls) != 2 {
-		t.Fatalf("expected 2 status transitions, got %d: %v", len(repo.updateStatusCalls), repo.updateStatusCalls)
-	}
-	if repo.updateStatusCalls[0] != domain.TaskStatusFailure {
-		t.Errorf("first transition: want Failure(%d), got %d", domain.TaskStatusFailure, repo.updateStatusCalls[0])
-	}
-	if repo.updateStatusCalls[1] != domain.TaskStatusAwaiting {
-		t.Errorf("second transition: want Awaiting(%d), got %d", domain.TaskStatusAwaiting, repo.updateStatusCalls[1])
-	}
-
-	// UI notification.
-	if ui.lastMessage != crashMessageWithDiscard(task.ID) {
-		t.Errorf("UI message: got %q, want %q", ui.lastMessage, crashMessageWithDiscard(task.ID))
-	}
 }
 
 // --- Task 3.14.1: Execute Dispatch Tests ---

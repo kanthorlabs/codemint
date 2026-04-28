@@ -91,14 +91,10 @@ func (m *mockTaskRepo) BulkInsert(_ context.Context, _ []*domain.Task) error {
 // --- Mock CodingAgent ---
 
 type mockCodingAgent struct {
-	acceptErr error
-	revertErr error
+	acceptErr    error
+	revertErr    error
 	acceptCalled bool
 	revertCalled bool
-}
-
-func (m *mockCodingAgent) ExecuteTask(_ context.Context, _ *domain.Task) error {
-	return nil
 }
 
 func (m *mockCodingAgent) Accept(_ context.Context, _ *domain.Task) error {

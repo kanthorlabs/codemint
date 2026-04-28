@@ -417,10 +417,11 @@ func TestScheduler_RejectsConcurrentRun(t *testing.T) {
 func TestScheduler_RunsTasksInOrder(t *testing.T) {
 	sessionID := idgen.MustNew()
 
+	// Use TaskTypeCoordination which is a no-op (doesn't require ACP runtime).
 	tasks := []*domain.Task{
-		{ID: "task-1", SessionID: sessionID, SeqEpic: 1, SeqStory: 1, SeqTask: 1, Type: domain.TaskTypeCoding, Timeout: domain.DefaultTaskTimeout},
-		{ID: "task-2", SessionID: sessionID, SeqEpic: 1, SeqStory: 1, SeqTask: 2, Type: domain.TaskTypeCoding, Timeout: domain.DefaultTaskTimeout},
-		{ID: "task-3", SessionID: sessionID, SeqEpic: 1, SeqStory: 2, SeqTask: 1, Type: domain.TaskTypeCoding, Timeout: domain.DefaultTaskTimeout},
+		{ID: "task-1", SessionID: sessionID, SeqEpic: 1, SeqStory: 1, SeqTask: 1, Type: domain.TaskTypeCoordination, Timeout: domain.DefaultTaskTimeout},
+		{ID: "task-2", SessionID: sessionID, SeqEpic: 1, SeqStory: 1, SeqTask: 2, Type: domain.TaskTypeCoordination, Timeout: domain.DefaultTaskTimeout},
+		{ID: "task-3", SessionID: sessionID, SeqEpic: 1, SeqStory: 2, SeqTask: 1, Type: domain.TaskTypeCoordination, Timeout: domain.DefaultTaskTimeout},
 	}
 
 	taskRepo := &mockTaskRepoForScheduler{tasks: tasks}

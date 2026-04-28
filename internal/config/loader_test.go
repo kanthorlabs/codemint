@@ -241,3 +241,73 @@ func TestExampleConfig_Loads(t *testing.T) {
 		t.Errorf("expected 3 workflows in example config, got %d", len(cfg.Workflows))
 	}
 }
+
+// TestGetSysCoding_Configured returns sys-coding when configured.
+func TestGetSysCoding_Configured(t *testing.T) {
+	content := `
+workflows: []
+assistants:
+  sys-default:
+    provider: opencode
+  sys-coding:
+    provider: codex
+    model: gpt-4
+`
+	tmpFile := writeTestFile(t, content)
+
+	cfg, err := Load(tmpFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	sysCoding := cfg.GetSysCoding()
+	if sysCoding.Provider != "codex" {
+		t.Errorf("GetSysCoding().Provider = %q; want %q", sysCoding.Provider, "codex")
+	}
+	if sysCoding.Model != "gpt-4" {
+		t.Errorf("GetSysCoding().Model = %q; want %q", sysCoding.Model, "gpt-4")
+	}
+}
+
+// TestGetSysCoding_FallbackToSysDefault falls back to sys-default when sys-coding not configured.
+func TestGetSysCoding_FallbackToSysDefault(t *testing.T) {
+	content := `
+workflows: []
+assistants:
+  sys-default:
+    provider: opencode
+    model: sonnet
+`
+	tmpFile := writeTestFile(t, content)
+
+	cfg, err := Load(tmpFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	sysCoding := cfg.GetSysCoding()
+	if sysCoding.Provider != "opencode" {
+		t.Errorf("GetSysCoding().Provider = %q; want %q (fallback to sys-default)", sysCoding.Provider, "opencode")
+	}
+	if sysCoding.Model != "sonnet" {
+		t.Errorf("GetSysCoding().Model = %q; want %q (fallback to sys-default)", sysCoding.Model, "sonnet")
+	}
+}
+
+// TestGetSysCoding_EmptyConfig returns empty when nothing configured.
+func TestGetSysCoding_EmptyConfig(t *testing.T) {
+	content := `
+workflows: []
+`
+	tmpFile := writeTestFile(t, content)
+
+	cfg, err := Load(tmpFile)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	sysCoding := cfg.GetSysCoding()
+	if sysCoding.Provider != "" {
+		t.Errorf("GetSysCoding().Provider = %q; want empty string for unconfigured", sysCoding.Provider)
+	}
+}

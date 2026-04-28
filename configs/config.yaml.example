@@ -30,3 +30,6 @@ workflows:
 #   sys-default:
 #     provider: opencode
 #     model: "github-copilot/claude-sonnet-4.6"
+#   sys-coding:
+#     provider: opencode
+#     model: "github-copilot/claude-sonnet-4.6"

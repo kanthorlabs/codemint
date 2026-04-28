@@ -284,42 +284,16 @@ func (e *Executor) Execute(ctx context.Context, sess *ActiveSession, task *domai
 	}
 }
 
-// ExecuteTask dispatches the task to the coding agent with a timeout derived
-// from task.Timeout (milliseconds). This is the legacy entry point that
-// preserves backward compatibility with Story 1.9 crash handling.
-//
-// If the agent returns an error (including context deadline exceeded), the
-// crash-fallback flow is triggered:
-//  1. task.assignee_id is reassigned to the human agent.
-//  2. task status is forced to TaskStatusFailure then TaskStatusAwaiting.
-//  3. The UI renders CrashMessage.
-func (e *Executor) ExecuteTask(ctx context.Context, task *domain.Task) error {
-	timeout := time.Duration(task.Timeout) * time.Millisecond
-	tCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	if err := e.codingAgent.ExecuteTask(tCtx, task); err != nil {
-		slog.Error("orchestrator: agent crash or timeout detected",
-			"task_id", task.ID,
-			"timeout_ms", task.Timeout,
-			"error", err,
-		)
-		e.handleCrash(ctx, task)
-		return fmt.Errorf("orchestrator: execute task %q: %w", task.ID, err)
-	}
-	return nil
-}
-
 // executeCoding forwards Coding tasks to the ACP worker via session/prompt.
 // (Task 3.14.2)
 func (e *Executor) executeCoding(ctx context.Context, sess *ActiveSession, task *domain.Task) error {
-	// 1. Mark task as processing.
-	if err := e.taskRepo.UpdateTaskStatus(ctx, task.ID, domain.TaskStatusProcessing); err != nil {
-		slog.Error("executor: failed to update task status to processing",
+	// 1. Claim the task (atomic Pending→Processing transition).
+	if err := e.taskRepo.Claim(ctx, task.ID); err != nil {
+		slog.Error("executor: failed to claim task",
 			"task_id", task.ID,
 			"error", err,
 		)
-		return fmt.Errorf("executor: update status processing: %w", err)
+		return fmt.Errorf("executor: claim task: %w", err)
 	}
 
 	// 2. Get the ACP worker for this session.
@@ -563,12 +537,13 @@ func (e *Executor) executeVerification(ctx context.Context, sess *ActiveSession,
 		}
 	}
 
-	// 3. Mark task as processing.
-	if err := e.taskRepo.UpdateTaskStatus(ctx, task.ID, domain.TaskStatusProcessing); err != nil {
-		slog.Error("executor: failed to update task status to processing",
+	// 3. Claim the task (atomic Pending→Processing transition).
+	if err := e.taskRepo.Claim(ctx, task.ID); err != nil {
+		slog.Error("executor: failed to claim task",
 			"task_id", task.ID,
 			"error", err,
 		)
+		return fmt.Errorf("executor: claim task: %w", err)
 	}
 
 	// 4. Execute command via LocalRunner.
@@ -615,12 +590,20 @@ func (e *Executor) executeVerification(ctx context.Context, sess *ActiveSession,
 func (e *Executor) executeConfirmation(ctx context.Context, sess *ActiveSession, task *domain.Task) error {
 	// Task 3.16.2: YOLO auto-approval bypass.
 	if e.isAutoApproved(sess, task) {
+		// Claim the task first (Pending→Processing).
+		if err := e.taskRepo.Claim(ctx, task.ID); err != nil {
+			slog.Error("executor: failed to claim auto-approved confirmation task",
+				"task_id", task.ID,
+				"error", err,
+			)
+			return err
+		}
 		// Set output for audit trail.
 		e.setTaskOutputJSON(ctx, task, map[string]string{
 			"auto_approved": "true",
 			"agent":         "sys-auto-approve",
 		})
-		// Mark as success (skip awaiting state entirely).
+		// Mark as success (Processing→Success).
 		if err := e.taskRepo.UpdateTaskStatus(ctx, task.ID, domain.TaskStatusSuccess); err != nil {
 			slog.Error("executor: failed to update auto-approved task status",
 				"task_id", task.ID,
@@ -650,7 +633,14 @@ func (e *Executor) executeConfirmation(ctx context.Context, sess *ActiveSession,
 		return nil
 	}
 
-	// 1. Set task and session status to Awaiting.
+	// 1. Claim the task (Pending→Processing), then set to Awaiting.
+	if err := e.taskRepo.Claim(ctx, task.ID); err != nil {
+		slog.Error("executor: failed to claim confirmation task",
+			"task_id", task.ID,
+			"error", err,
+		)
+		return fmt.Errorf("executor: claim confirmation task: %w", err)
+	}
 	if err := e.taskRepo.UpdateTaskStatus(ctx, task.ID, domain.TaskStatusAwaiting); err != nil {
 		slog.Error("executor: failed to update task status to awaiting",
 			"task_id", task.ID,
@@ -724,12 +714,20 @@ func (e *Executor) executeConfirmation(ctx context.Context, sess *ActiveSession,
 func (e *Executor) executeRetrospective(ctx context.Context, sess *ActiveSession, task *domain.Task) error {
 	// Task 3.16.2: YOLO auto-approval bypass - skip freeform follow-up entirely.
 	if e.isAutoApproved(sess, task) {
+		// Claim the task first (Pending→Processing).
+		if err := e.taskRepo.Claim(ctx, task.ID); err != nil {
+			slog.Error("executor: failed to claim auto-approved retrospective task",
+				"task_id", task.ID,
+				"error", err,
+			)
+			return err
+		}
 		// Set output for audit trail.
 		e.setTaskOutputJSON(ctx, task, map[string]string{
 			"auto_approved": "true",
 			"agent":         "sys-auto-approve",
 		})
-		// Mark as success directly.
+		// Mark as success (Processing→Success).
 		if err := e.taskRepo.UpdateTaskStatus(ctx, task.ID, domain.TaskStatusSuccess); err != nil {
 			slog.Error("executor: failed to update auto-approved retrospective status",
 				"task_id", task.ID,
@@ -758,7 +756,14 @@ func (e *Executor) executeRetrospective(ctx context.Context, sess *ActiveSession
 		return nil
 	}
 
-	// 1. Set task status to Awaiting.
+	// 1. Claim the task (Pending→Processing), then set to Awaiting.
+	if err := e.taskRepo.Claim(ctx, task.ID); err != nil {
+		slog.Error("executor: failed to claim retrospective task",
+			"task_id", task.ID,
+			"error", err,
+		)
+		return fmt.Errorf("executor: claim retrospective task: %w", err)
+	}
 	if err := e.taskRepo.UpdateTaskStatus(ctx, task.ID, domain.TaskStatusAwaiting); err != nil {
 		slog.Error("executor: failed to update task status to awaiting",
 			"task_id", task.ID,

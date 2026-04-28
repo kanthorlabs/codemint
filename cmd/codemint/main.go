@@ -269,6 +269,36 @@ func run() error {
 		log.Printf("Warning: System Assistant disabled (no valid provider)")
 	}
 
+	// Step 9i: Create Coding Agent for task execution.
+	// Resolves sys-coding provider (falls back to sys-default if not configured).
+	var codingAgent agent.CodingAgent
+	sysCodingCfg := appCfg.GetSysCoding()
+	if sysCodingCfg.Provider != "" {
+		codingProvider, codingErr := agent.ResolveSystemAssistantProvider(providerRegistry, sysCodingCfg.Provider)
+		if codingErr != nil {
+			log.Printf("Warning: failed to resolve sys-coding provider %q: %v", sysCodingCfg.Provider, codingErr)
+		} else if codingProvider != nil {
+			ca, caErr := agent.NewACPCodingAgent(agent.ACPCodingAgentConfig{
+				Attacher: acpRuntime,
+				Provider: codingProvider,
+			})
+			switch {
+			case errors.Is(caErr, agent.ErrProviderBinaryMissing):
+				log.Printf("Warning: %v — Coding Agent disabled", caErr)
+			case caErr != nil:
+				log.Printf("Warning: failed to create coding agent: %v", caErr)
+			default:
+				codingAgent = ca
+				log.Printf("Coding Agent ready (provider=%s)", codingProvider.Name)
+			}
+		}
+	}
+	// Fallback to null coding agent if not configured (tasks will still be scheduled).
+	if codingAgent == nil {
+		codingAgent = agent.NewNullCodingAgent()
+		log.Printf("Coding Agent: using null agent (no provider configured)")
+	}
+
 	// Step 10: Create dispatcher with system assistant.
 	dispatcher := orchestrator.NewDispatcher(cmdRegistry, mediator, systemAssistant, workflowReg)
 
@@ -448,7 +478,7 @@ func run() error {
 		scheduler = orchestrator.NewSchedulerWithConfig(orchestrator.SchedulerConfig{
 			TaskRepo:      taskRepo,
 			WorkflowRepo:  workflowRepo,
-			Executor:      orchestrator.NewExecutor(nil, taskRepo, agentRepo, mediator),
+			Executor:      orchestrator.NewExecutor(codingAgent, taskRepo, agentRepo, mediator),
 			ACPRegistry:   acpRegistry,
 			ACPRuntime:    acpRuntime,
 			ActiveSession: activeSession,
