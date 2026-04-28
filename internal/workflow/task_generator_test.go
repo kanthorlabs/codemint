@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"encoding/json"
 	"testing"
 
 	"codemint.kanthorlabs.com/internal/domain"
@@ -8,7 +9,7 @@ import (
 )
 
 func TestTaskGenerator_GenerateTasks_Basic(t *testing.T) {
-	gen := NewTaskGenerator("", "", "")
+	gen := NewTaskGenerator("", "", "", nil)
 
 	wf := &domain.WorkflowFile{
 		Name:    "test-workflow",
@@ -63,7 +64,7 @@ func TestTaskGenerator_GenerateTasks_Basic(t *testing.T) {
 }
 
 func TestTaskGenerator_GenerateTasks_WithDependsOn(t *testing.T) {
-	gen := NewTaskGenerator("", "", "")
+	gen := NewTaskGenerator("", "", "", nil)
 
 	wf := &domain.WorkflowFile{
 		Name:    "test-workflow",
@@ -120,7 +121,7 @@ func TestTaskGenerator_GenerateTasks_WithDependsOn(t *testing.T) {
 }
 
 func TestTaskGenerator_GenerateTasks_WithCondition(t *testing.T) {
-	gen := NewTaskGenerator("", "", "")
+	gen := NewTaskGenerator("", "", "", nil)
 
 	successCondition := domain.TaskStatusSuccess
 	wf := &domain.WorkflowFile{
@@ -169,7 +170,7 @@ func TestTaskGenerator_GenerateTasks_WithCondition(t *testing.T) {
 }
 
 func TestTaskGenerator_GenerateRoutedTasks_WithRoutes(t *testing.T) {
-	gen := NewTaskGenerator("", "", "")
+	gen := NewTaskGenerator("", "", "", nil)
 
 	wf := &domain.WorkflowFile{
 		Name:    "test-workflow",
@@ -254,7 +255,7 @@ func TestTaskGenerator_GenerateRoutedTasks_WithRoutes(t *testing.T) {
 }
 
 func TestTaskGenerator_GenerateRoutedTasks_NullRoute(t *testing.T) {
-	gen := NewTaskGenerator("", "", "")
+	gen := NewTaskGenerator("", "", "", nil)
 
 	wf := &domain.WorkflowFile{
 		Name:    "test-workflow",
@@ -315,7 +316,7 @@ func TestTaskGenerator_GenerateRoutedTasks_NullRoute(t *testing.T) {
 }
 
 func TestTaskGenerator_GenerateTasks_MultipleEpics(t *testing.T) {
-	gen := NewTaskGenerator("", "", "")
+	gen := NewTaskGenerator("", "", "", nil)
 
 	wf := &domain.WorkflowFile{
 		Name:    "test-workflow",
@@ -376,7 +377,7 @@ func TestTaskGenerator_GenerateTasks_MultipleEpics(t *testing.T) {
 func TestTaskGenerator_GenerateTasksWithGuardrails_VerificationInjection(t *testing.T) {
 	humanID := idgen.MustNew()
 	assistantID := idgen.MustNew()
-	gen := NewTaskGenerator(humanID, assistantID, "")
+	gen := NewTaskGenerator(humanID, assistantID, "", nil)
 
 	wf := &domain.WorkflowFile{
 		Name:     "test-workflow",
@@ -450,7 +451,7 @@ func TestTaskGenerator_GenerateTasksWithGuardrails_VerificationInjection(t *test
 }
 
 func TestTaskGenerator_GenerateTasksWithGuardrails_DisabledGuardrails(t *testing.T) {
-	gen := NewTaskGenerator("", "", "")
+	gen := NewTaskGenerator("", "", "", nil)
 
 	wf := &domain.WorkflowFile{
 		Name:    "test-workflow",
@@ -497,7 +498,7 @@ func TestTaskGenerator_GenerateTasksWithGuardrails_DisabledGuardrails(t *testing
 }
 
 func TestTaskGenerator_GenerateTasksWithGuardrails_StoryOverride(t *testing.T) {
-	gen := NewTaskGenerator("", "", "")
+	gen := NewTaskGenerator("", "", "", nil)
 
 	// Story-level guardrails override workflow-level
 	storyGuardrails := domain.GuardrailSettings{
@@ -553,7 +554,7 @@ func TestTaskGenerator_GenerateTasksWithGuardrails_StoryOverride(t *testing.T) {
 }
 
 func TestTaskGenerator_GenerateTasksWithGuardrails_EpicOverrideRetrospective(t *testing.T) {
-	gen := NewTaskGenerator("", "", "")
+	gen := NewTaskGenerator("", "", "", nil)
 
 	// Epic-level retrospective override
 	falseVal := false
@@ -600,7 +601,7 @@ func TestTaskGenerator_GenerateTasksWithGuardrails_EpicOverrideRetrospective(t *
 }
 
 func TestTaskGenerator_GenerateTasksWithGuardrails_NoVerificationForNonCodingTasks(t *testing.T) {
-	gen := NewTaskGenerator("", "", "")
+	gen := NewTaskGenerator("", "", "", nil)
 
 	wf := &domain.WorkflowFile{
 		Name:     "test-workflow",
@@ -645,5 +646,162 @@ func TestTaskGenerator_GenerateTasksWithGuardrails_NoVerificationForNonCodingTas
 	}
 	if verificationCount != 0 {
 		t.Errorf("expected 0 verification tasks for non-coding story, got %d", verificationCount)
+	}
+}
+
+// --- Task 2.0.5.5: L2 Skill Validation Tests ---
+
+func TestTaskGenerator_GenerateTasks_CopiesSkillToTaskInput(t *testing.T) {
+	// Create resolver with the skill we're referencing.
+	resolver := newMockSkillResolver()
+	resolver.AddSkill("@codemint/gatherer")
+
+	gen := NewTaskGenerator("", "", "", resolver)
+
+	wf := &domain.WorkflowFile{
+		Name:    "test-workflow",
+		Version: "1.0",
+		Epics: []domain.EpicDefinition{
+			{
+				ID:   "epic-1",
+				Name: "Epic 1",
+				Stories: []domain.StoryDefinition{
+					{ID: "story-1", Name: "Gather Context", Type: domain.TaskTypeCoding, Skill: "@codemint/gatherer"},
+				},
+			},
+		},
+	}
+
+	cfg := GenerateConfig{
+		ProjectID: idgen.MustNew(),
+		SessionID: idgen.MustNew(),
+	}
+
+	tasks, err := gen.GenerateTasks(wf, cfg)
+	if err != nil {
+		t.Fatalf("GenerateTasks() error: %v", err)
+	}
+
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+
+	// Verify task.Input contains the skill.
+	task := tasks[0]
+	if !task.Input.Valid {
+		t.Fatal("task.Input should be valid")
+	}
+
+	var taskInput domain.TaskInput
+	if err := json.Unmarshal([]byte(task.Input.String), &taskInput); err != nil {
+		t.Fatalf("failed to unmarshal task input: %v", err)
+	}
+
+	if taskInput.Skill != "@codemint/gatherer" {
+		t.Errorf("taskInput.Skill = %q, want %q", taskInput.Skill, "@codemint/gatherer")
+	}
+}
+
+func TestTaskGenerator_GenerateTasks_FailsOnMissingSkill(t *testing.T) {
+	// Empty resolver - skill won't be found.
+	resolver := newMockSkillResolver()
+
+	gen := NewTaskGenerator("", "", "", resolver)
+
+	wf := &domain.WorkflowFile{
+		Name:    "test-workflow",
+		Version: "1.0",
+		Epics: []domain.EpicDefinition{
+			{
+				ID:   "epic-1",
+				Name: "Epic 1",
+				Stories: []domain.StoryDefinition{
+					{ID: "story-1", Name: "Gather Context", Type: domain.TaskTypeCoding, Skill: "@codemint/missing"},
+				},
+			},
+		},
+	}
+
+	cfg := GenerateConfig{
+		ProjectID: idgen.MustNew(),
+		SessionID: idgen.MustNew(),
+	}
+
+	_, err := gen.GenerateTasks(wf, cfg)
+	if err == nil {
+		t.Fatal("GenerateTasks() expected error for missing skill, got nil")
+	}
+
+	// Verify error message.
+	expectedSubstr := `skill "@codemint/missing" no longer in registry`
+	if !contains(err.Error(), expectedSubstr) {
+		t.Errorf("error = %q, want to contain %q", err.Error(), expectedSubstr)
+	}
+}
+
+func TestTaskGenerator_GenerateTasks_SkipsValidationWithNilResolver(t *testing.T) {
+	// Nil resolver - validation is skipped.
+	gen := NewTaskGenerator("", "", "", nil)
+
+	wf := &domain.WorkflowFile{
+		Name:    "test-workflow",
+		Version: "1.0",
+		Epics: []domain.EpicDefinition{
+			{
+				ID:   "epic-1",
+				Name: "Epic 1",
+				Stories: []domain.StoryDefinition{
+					{ID: "story-1", Name: "Gather Context", Type: domain.TaskTypeCoding, Skill: "@codemint/missing"},
+				},
+			},
+		},
+	}
+
+	cfg := GenerateConfig{
+		ProjectID: idgen.MustNew(),
+		SessionID: idgen.MustNew(),
+	}
+
+	// Should succeed even with missing skill because resolver is nil.
+	tasks, err := gen.GenerateTasks(wf, cfg)
+	if err != nil {
+		t.Fatalf("GenerateTasks() error: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Errorf("expected 1 task, got %d", len(tasks))
+	}
+}
+
+func TestTaskGenerator_GenerateTasks_NoSkillDoesNotSetInput(t *testing.T) {
+	gen := NewTaskGenerator("", "", "", nil)
+
+	wf := &domain.WorkflowFile{
+		Name:    "test-workflow",
+		Version: "1.0",
+		Epics: []domain.EpicDefinition{
+			{
+				ID:   "epic-1",
+				Name: "Epic 1",
+				Stories: []domain.StoryDefinition{
+					{ID: "story-1", Name: "Simple Story", Type: domain.TaskTypeCoding},
+				},
+			},
+		},
+	}
+
+	cfg := GenerateConfig{
+		ProjectID: idgen.MustNew(),
+		SessionID: idgen.MustNew(),
+	}
+
+	tasks, err := gen.GenerateTasks(wf, cfg)
+	if err != nil {
+		t.Fatalf("GenerateTasks() error: %v", err)
+	}
+
+	task := tasks[0]
+	// Input should not be set for stories without skills.
+	if task.Input.Valid {
+		t.Errorf("task.Input should not be valid for story without skill, got %q", task.Input.String)
 	}
 }

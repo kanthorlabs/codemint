@@ -39,6 +39,12 @@ type TaskInput struct {
 
 	// Metadata holds arbitrary key-value pairs for extensibility.
 	Metadata map[string]string `json:"metadata,omitempty"`
+
+	// Skill is the skill ID copied from Story.Skill at task creation time.
+	// The executor resolves this to a skill body and injects it as the first
+	// TextContent block in the ACP session/prompt payload.
+	// Empty for non-skill tasks (verification command, confirmation prompt, etc.).
+	Skill string `json:"skill,omitempty"`
 }
 
 // ParseTaskInput parses a raw string into a TaskInput struct.

@@ -4,8 +4,11 @@ package workflow
 
 import (
 	"database/sql"
+	"encoding/json"
+	"fmt"
 
 	"codemint.kanthorlabs.com/internal/domain"
+	"codemint.kanthorlabs.com/internal/skills"
 	"codemint.kanthorlabs.com/internal/util/idgen"
 )
 
@@ -24,6 +27,8 @@ type TaskGenerator struct {
 	assistantAgentID string
 	// yoloAgentID is the ID of the sys-auto-approve agent for YOLO mode tasks.
 	yoloAgentID string
+	// skills is the skill resolver for L2 validation and skill ID lookup.
+	skills skills.SkillResolver
 }
 
 // NewTaskGenerator creates a new TaskGenerator with agent IDs for task assignment.
@@ -31,11 +36,13 @@ type TaskGenerator struct {
 //   - humanAgentID: for Confirmation and Retrospective tasks (require human approval)
 //   - assistantAgentID: for Coding and Verification tasks (AI-executed)
 //   - yoloAgentID: for auto-approved tasks in YOLO mode
-func NewTaskGenerator(humanAgentID, assistantAgentID, yoloAgentID string) *TaskGenerator {
+//   - skillResolver: for L2 skill validation (may be nil to skip validation)
+func NewTaskGenerator(humanAgentID, assistantAgentID, yoloAgentID string, skillResolver skills.SkillResolver) *TaskGenerator {
 	return &TaskGenerator{
 		humanAgentID:     humanAgentID,
 		assistantAgentID: assistantAgentID,
 		yoloAgentID:      yoloAgentID,
+		skills:           skillResolver,
 	}
 }
 
@@ -72,7 +79,10 @@ func (g *TaskGenerator) GenerateTasks(wf *domain.WorkflowFile, cfg GenerateConfi
 	for epicIdx, epic := range wf.Epics {
 		// Process stories in order within each epic.
 		for storyIdx, story := range epic.Stories {
-			task := g.createTask(cfg, epicIdx+1, storyIdx+1, 1, story)
+			task, err := g.createTask(cfg, epicIdx+1, storyIdx+1, 1, story)
+			if err != nil {
+				return nil, err
+			}
 			tasks = append(tasks, task)
 			storyTaskMap[story.ID] = task
 		}
@@ -293,7 +303,15 @@ func (g *TaskGenerator) createRetrospectiveTask(cfg GenerateConfig, seqEpic int,
 }
 
 // createTask creates a single domain.Task from a StoryDefinition.
-func (g *TaskGenerator) createTask(cfg GenerateConfig, seqEpic, seqStory, seqTask int, story domain.StoryDefinition) *domain.Task {
+// It validates and copies the skill ID into TaskInput if present.
+func (g *TaskGenerator) createTask(cfg GenerateConfig, seqEpic, seqStory, seqTask int, story domain.StoryDefinition) (*domain.Task, error) {
+	// L2 skill validation: re-check that the skill still exists in the registry.
+	if story.Skill != "" && g.skills != nil {
+		if _, ok := g.skills.Get(story.Skill); !ok {
+			return nil, fmt.Errorf("task generator: skill %q no longer in registry", story.Skill)
+		}
+	}
+
 	task := &domain.Task{
 		ID:         idgen.MustNew(),
 		ProjectID:  cfg.ProjectID,
@@ -308,7 +326,19 @@ func (g *TaskGenerator) createTask(cfg GenerateConfig, seqEpic, seqStory, seqTas
 		Timeout:    domain.DefaultTaskTimeout,
 	}
 
-	return task
+	// Build TaskInput with skill ID if present.
+	if story.Skill != "" {
+		taskInput := domain.TaskInput{
+			Skill: story.Skill,
+		}
+		inputJSON, err := json.Marshal(taskInput)
+		if err != nil {
+			return nil, fmt.Errorf("task generator: marshal task input: %w", err)
+		}
+		task.Input = sql.NullString{String: string(inputJSON), Valid: true}
+	}
+
+	return task, nil
 }
 
 // GenerateRoutedTasks creates tasks with route-based conditional execution.
@@ -329,7 +359,10 @@ func (g *TaskGenerator) GenerateRoutedTasks(wf *domain.WorkflowFile, cfg Generat
 	// First pass: create tasks for all stories.
 	for epicIdx, epic := range wf.Epics {
 		for storyIdx, story := range epic.Stories {
-			task := g.createTask(cfg, epicIdx+1, storyIdx+1, 1, story)
+			task, err := g.createTask(cfg, epicIdx+1, storyIdx+1, 1, story)
+			if err != nil {
+				return nil, err
+			}
 			genTask := &GeneratedTask{
 				Task:    task,
 				StoryID: story.ID,

@@ -21,6 +21,7 @@ func TestParseTaskInput_RoundTrip(t *testing.T) {
 			"story_id": "3.15",
 			"priority": "high",
 		},
+		Skill: "@codemint/gatherer",
 	}
 
 	// Marshal to JSON.
@@ -80,6 +81,10 @@ func TestParseTaskInput_RoundTrip(t *testing.T) {
 				key, val, original.Metadata[key])
 		}
 	}
+
+	if parsed.Skill != original.Skill {
+		t.Errorf("Skill mismatch: got %q, want %q", parsed.Skill, original.Skill)
+	}
 }
 
 func TestParseTaskInput_LegacyFallback(t *testing.T) {
@@ -128,6 +133,35 @@ func TestParseTaskInput_MinimalJSON(t *testing.T) {
 	}
 	if len(parsed.Tools) != 0 {
 		t.Errorf("expected empty Tools, got %v", parsed.Tools)
+	}
+	if parsed.Skill != "" {
+		t.Errorf("expected empty Skill, got %q", parsed.Skill)
+	}
+}
+
+func TestParseTaskInput_JSONWithSkill(t *testing.T) {
+	input := `{
+		"prompt": "Run gatherer pass",
+		"skill": "@codemint/gatherer"
+	}`
+
+	parsed, err := ParseTaskInput(input)
+	if err != nil {
+		t.Fatalf("ParseTaskInput failed: %v", err)
+	}
+
+	if parsed.Prompt != "Run gatherer pass" {
+		t.Errorf("Prompt mismatch: got %q", parsed.Prompt)
+	}
+	if parsed.Skill != "@codemint/gatherer" {
+		t.Errorf("Skill mismatch: got %q, want %q", parsed.Skill, "@codemint/gatherer")
+	}
+
+	// Verify omitempty: marshal and check JSON doesn't have empty skill if not set
+	noSkill := &TaskInput{Prompt: "Hello"}
+	data, _ := json.Marshal(noSkill)
+	if string(data) != `{"prompt":"Hello"}` {
+		t.Errorf("Expected omitempty to exclude skill, got %s", string(data))
 	}
 }
 

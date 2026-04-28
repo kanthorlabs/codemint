@@ -9,6 +9,14 @@ import (
 	"codemint.kanthorlabs.com/internal/domain"
 )
 
+// SkillResolver provides skill lookup capabilities. It is the interface
+// consumed by the executor and other components that need to resolve skills
+// by ID.
+type SkillResolver interface {
+	// Get returns the skill with the given ID, if present.
+	Get(id string) (domain.Skill, bool)
+}
+
 // Registry aggregates skills from multiple source directories and the embedded
 // core skills. Embedded skills always have the highest precedence: if the same
 // Skill ID is found in an external directory and the embedded set, the embedded
@@ -71,6 +79,17 @@ func (r *Registry) All() map[string]domain.Skill {
 func (r *Registry) Get(id string) (domain.Skill, bool) {
 	s, ok := r.skills[id]
 	return s, ok
+}
+
+// GetByName returns the skill with the given Name, if present.
+// This is a convenience method for looking up skills by directory name.
+func (r *Registry) GetByName(name string) (domain.Skill, bool) {
+	for _, s := range r.skills {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return domain.Skill{}, false
 }
 
 // loadDir iterates over immediate subdirectories of dirPath and parses each

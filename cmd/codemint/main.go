@@ -169,8 +169,10 @@ func run() error {
 
 	// Step 9b: Create Workflow File Registry (Story 2.0.1).
 	// Loads WORKFLOW.yaml files from embedded and external sources.
+	// Note: Skills validation (L1) is done after skills registry is created.
+	// For now, pass nil to skip validation - will be wired in Task 2.0.5.7.
 	workflowFileReg := workflow.NewFileRegistry()
-	if err := workflowFileReg.LoadAll(); err != nil {
+	if err := workflowFileReg.LoadAll(nil); err != nil {
 		log.Printf("Warning: failed to load workflow files: %v", err)
 	} else if workflowFileReg.Len() > 0 {
 		log.Printf("Loaded %d workflow file(s): %v", workflowFileReg.Len(), workflowFileReg.Names())
@@ -399,8 +401,9 @@ func run() error {
 	}
 	// Note: assistantAgentID would be set when we have a configured assistant agent.
 	// For now, tasks will use the default assignee from GenerateConfig.
+	// Skills resolver will be wired in Task 2.0.5.7.
 
-	taskGenerator := workflow.NewTaskGenerator(humanAgentID, assistantAgentID, acpRuntime.YoloAgentID)
+	taskGenerator := workflow.NewTaskGenerator(humanAgentID, assistantAgentID, acpRuntime.YoloAgentID, nil)
 	workflowCmdDeps := &repl.WorkflowCommandDeps{
 		FileRegistry:  workflowFileReg,
 		TaskGenerator: taskGenerator,

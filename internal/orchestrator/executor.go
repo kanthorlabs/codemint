@@ -19,6 +19,7 @@ import (
 	"codemint.kanthorlabs.com/internal/domain"
 	"codemint.kanthorlabs.com/internal/registry"
 	"codemint.kanthorlabs.com/internal/repository"
+	"codemint.kanthorlabs.com/internal/skills"
 )
 
 // CrashMessage is the exact UI text displayed to the user when an agent
@@ -105,9 +106,10 @@ type TaskFailureOutput struct {
 
 // Failure sentinels for task output.
 const (
-	FailureSentinelInvalidInput      = "invalid_input"
+	FailureSentinelInvalidInput       = "invalid_input"
 	FailureSentinelContextFileMissing = "context_file_missing"
-	FailureSentinelPathEscape        = "path_escape"
+	FailureSentinelPathEscape         = "path_escape"
+	FailureSentinelSkillNotFound      = "skill_not_found"
 )
 
 // resolveContextFiles resolves relative file paths under the project working
@@ -183,6 +185,7 @@ type Executor struct {
 	agentRepo   repository.AgentRepository
 	ui          registry.UIMediator
 	runner      *LocalRunner
+	skills      skills.SkillResolver
 
 	// doneChannels tracks per-task completion signals for Coding tasks.
 	// Used to block until StatusMapper signals Success/Failure.
@@ -202,6 +205,7 @@ type ExecutorConfig struct {
 	UI          registry.UIMediator
 	Runner      *LocalRunner
 	AdvanceCh   <-chan struct{}
+	Skills      skills.SkillResolver
 }
 
 // NewExecutor constructs an Executor with the provided dependencies.
@@ -234,6 +238,7 @@ func NewExecutorWithConfig(cfg ExecutorConfig) *Executor {
 		agentRepo:    cfg.AgentRepo,
 		ui:           cfg.UI,
 		runner:       runner,
+		skills:       cfg.Skills,
 		doneChannels: make(map[string]chan domain.TaskStatus),
 		advanceCh:    cfg.AdvanceCh,
 	}
@@ -361,10 +366,38 @@ func (e *Executor) executeCoding(ctx context.Context, sess *ActiveSession, task 
 		return nil // Per-task failure, don't kill the scheduler
 	}
 
-	// 5. Resolve context files relative to project working directory.
+	// 5. Build prompt blocks.
 	// Per ACP spec, context is sent as resource_link ContentBlocks in the prompt.
+	// Order matters: skill body (if any) → task prompt → context files.
 	var promptBlocks []acp.ContentBlock
+
+	// 5a. Resolve and inject skill body if skill ID is present.
+	if taskInput.Skill != "" {
+		if e.skills == nil {
+			e.failTaskWithReason(ctx, task, FailureSentinelSkillNotFound,
+				fmt.Sprintf("skill resolver not configured; cannot resolve: %s", taskInput.Skill))
+			return nil
+		}
+		skill, ok := e.skills.Get(taskInput.Skill)
+		if !ok {
+			e.failTaskWithReason(ctx, task, FailureSentinelSkillNotFound,
+				fmt.Sprintf("skill not found: %s", taskInput.Skill))
+			return nil // Per-task failure, scheduler continues
+		}
+		if skill.Instruction == "" {
+			e.failTaskWithReason(ctx, task, FailureSentinelSkillNotFound,
+				fmt.Sprintf("skill body empty: %s", taskInput.Skill))
+			return nil
+		}
+		// Frame the skill body with a preamble so agents can identify the skill.
+		framed := fmt.Sprintf("[skill: %s]\n\n%s", taskInput.Skill, skill.Instruction)
+		promptBlocks = append(promptBlocks, acp.TextContent(framed))
+	}
+
+	// 5b. Add the task prompt.
 	promptBlocks = append(promptBlocks, acp.TextContent(taskInput.Prompt))
+
+	// 5c. Resolve context files relative to project working directory.
 
 	if len(taskInput.ContextFiles) > 0 {
 		resolvedPaths, err := resolveContextFiles(sess.Project, taskInput.ContextFiles)

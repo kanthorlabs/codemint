@@ -20,6 +20,28 @@ import (
 
 // --- Mocks ---
 
+// mockSkillResolver implements skills.SkillResolver for testing.
+type mockSkillResolver struct {
+	skills map[string]domain.Skill
+}
+
+func newMockSkillResolver() *mockSkillResolver {
+	return &mockSkillResolver{skills: make(map[string]domain.Skill)}
+}
+
+func (m *mockSkillResolver) Get(id string) (domain.Skill, bool) {
+	s, ok := m.skills[id]
+	return s, ok
+}
+
+func (m *mockSkillResolver) AddSkill(id string, instruction string) {
+	m.skills[id] = domain.Skill{
+		ID:          id,
+		Name:        id,
+		Instruction: instruction,
+	}
+}
+
 type mockCodingAgent struct {
 	executeErr error
 }
@@ -994,6 +1016,11 @@ func TestExecutor_InvalidInput_DoesNotKillScheduler(t *testing.T) {
 			sentinel: FailureSentinelPathEscape,
 			detail:   "path escapes project directory: ../../../etc/passwd",
 		},
+		{
+			name:     "skill not found sentinel",
+			sentinel: FailureSentinelSkillNotFound,
+			detail:   "skill not found: @codemint/gatherer",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1732,5 +1759,342 @@ func TestExecutor_AutoApproved_EmitsEvent(t *testing.T) {
 	}
 	if payload.TaskType != int(domain.TaskTypeConfirmation) {
 		t.Errorf("Payload.TaskType = %d, want %d", payload.TaskType, int(domain.TaskTypeConfirmation))
+	}
+}
+
+// --- Task 2.0.5: Skill Injection Tests ---
+
+// TestExecutor_Coding_InjectsSkillBody verifies that when TaskInput.Skill is set,
+// the executor prepends the skill body as the first TextContent block.
+func TestExecutor_Coding_InjectsSkillBody(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "executor_skill_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create test file for context.
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatalf("failed to create src dir: %v", err)
+	}
+	mainFile := filepath.Join(srcDir, "main.go")
+	if err := os.WriteFile(mainFile, []byte("package main"), 0644); err != nil {
+		t.Fatalf("failed to create main.go: %v", err)
+	}
+
+	sessionID := idgen.MustNew()
+	repo := &mockTaskRepo{}
+	ui := &mockUI{}
+
+	// Create mock skill resolver with a test skill.
+	skillResolver := newMockSkillResolver()
+	skillResolver.AddSkill("@codemint/gatherer", "# Gatherer\n\nYou are a context gatherer agent.")
+
+	runtime, sentMessages, cleanup := createTestRuntimeWithMockWorker(sessionID, repo, ui)
+	defer cleanup()
+
+	executor := NewExecutorWithConfig(ExecutorConfig{
+		TaskRepo: repo,
+		UI:       ui,
+		Skills:   skillResolver,
+	})
+
+	sess := &ActiveSession{
+		Project: &domain.Project{
+			ID:         "test-project",
+			WorkingDir: tmpDir,
+		},
+		Session: &domain.Session{ID: sessionID},
+	}
+	sess.SetACPRuntime(runtime)
+	sess.SetACPSessionID("acp-session-123")
+
+	// Create task with skill.
+	input := domain.TaskInput{
+		Prompt:       "Gather context from the project",
+		Skill:        "@codemint/gatherer",
+		ContextFiles: []string{"src/main.go"},
+	}
+	inputJSON, _ := json.Marshal(input)
+
+	task := &domain.Task{
+		ID:      idgen.MustNew(),
+		Type:    domain.TaskTypeCoding,
+		Timeout: 1000,
+		Input:   sql.NullString{String: string(inputJSON), Valid: true},
+	}
+
+	// Execute in goroutine since it will block waiting for completion.
+	go func() {
+		_ = executor.Execute(context.Background(), sess, task)
+	}()
+
+	// Wait for message to be sent.
+	var sentMsg *acp.Message
+	select {
+	case sentMsg = <-sentMessages:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for message to be sent")
+	}
+
+	// Verify the sent message.
+	if sentMsg.Method != acp.MethodSessionPrompt {
+		t.Fatalf("expected method %s, got %s", acp.MethodSessionPrompt, sentMsg.Method)
+	}
+
+	// Parse params.
+	var params acp.SessionPromptParams
+	if err := json.Unmarshal(sentMsg.Params, &params); err != nil {
+		t.Fatalf("failed to unmarshal params: %v", err)
+	}
+
+	// Should have 3 blocks: skill body, task prompt, context file.
+	if len(params.Prompt) != 3 {
+		t.Fatalf("expected 3 prompt blocks (skill + prompt + context), got %d", len(params.Prompt))
+	}
+
+	// First block should be skill body with preamble.
+	if params.Prompt[0].Type != "text" {
+		t.Errorf("prompt[0].Type = %q, want text", params.Prompt[0].Type)
+	}
+	expectedSkillPreamble := "[skill: @codemint/gatherer]\n\n# Gatherer\n\nYou are a context gatherer agent."
+	if params.Prompt[0].Text != expectedSkillPreamble {
+		t.Errorf("prompt[0].Text = %q, want %q", params.Prompt[0].Text, expectedSkillPreamble)
+	}
+
+	// Second block should be task prompt.
+	if params.Prompt[1].Type != "text" || params.Prompt[1].Text != "Gather context from the project" {
+		t.Errorf("prompt[1] mismatch: got type=%s text=%s", params.Prompt[1].Type, params.Prompt[1].Text)
+	}
+
+	// Third block should be context file.
+	if params.Prompt[2].Type != "resource_link" {
+		t.Errorf("prompt[2].Type = %q, want resource_link", params.Prompt[2].Type)
+	}
+}
+
+// TestExecutor_Coding_NoSkill_PreservesExistingBehavior verifies that tasks without
+// skill field work as before (no skill block prepended).
+func TestExecutor_Coding_NoSkill_PreservesExistingBehavior(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "executor_no_skill_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sessionID := idgen.MustNew()
+	repo := &mockTaskRepo{}
+	ui := &mockUI{}
+
+	runtime, sentMessages, cleanup := createTestRuntimeWithMockWorker(sessionID, repo, ui)
+	defer cleanup()
+
+	// No skill resolver needed - skill field is empty.
+	executor := NewExecutorWithConfig(ExecutorConfig{
+		TaskRepo: repo,
+		UI:       ui,
+	})
+
+	sess := &ActiveSession{
+		Project: &domain.Project{
+			ID:         "test-project",
+			WorkingDir: tmpDir,
+		},
+		Session: &domain.Session{ID: sessionID},
+	}
+	sess.SetACPRuntime(runtime)
+	sess.SetACPSessionID("acp-session-123")
+
+	// Create task without skill.
+	input := domain.TaskInput{
+		Prompt: "Implement feature X",
+		// No Skill field
+	}
+	inputJSON, _ := json.Marshal(input)
+
+	task := &domain.Task{
+		ID:      idgen.MustNew(),
+		Type:    domain.TaskTypeCoding,
+		Timeout: 1000,
+		Input:   sql.NullString{String: string(inputJSON), Valid: true},
+	}
+
+	// Execute in goroutine.
+	go func() {
+		_ = executor.Execute(context.Background(), sess, task)
+	}()
+
+	// Wait for message.
+	var sentMsg *acp.Message
+	select {
+	case sentMsg = <-sentMessages:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for message to be sent")
+	}
+
+	// Parse params.
+	var params acp.SessionPromptParams
+	if err := json.Unmarshal(sentMsg.Params, &params); err != nil {
+		t.Fatalf("failed to unmarshal params: %v", err)
+	}
+
+	// Should have only 1 block: task prompt.
+	if len(params.Prompt) != 1 {
+		t.Fatalf("expected 1 prompt block (just prompt), got %d", len(params.Prompt))
+	}
+
+	// First block should be task prompt.
+	if params.Prompt[0].Type != "text" || params.Prompt[0].Text != "Implement feature X" {
+		t.Errorf("prompt[0] mismatch: got type=%s text=%s", params.Prompt[0].Type, params.Prompt[0].Text)
+	}
+}
+
+// TestExecutor_Coding_SkillNotFound_FailsGracefully verifies that a missing skill
+// fails the task gracefully without killing the scheduler.
+func TestExecutor_Coding_SkillNotFound_FailsGracefully(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "executor_skill_missing_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sessionID := idgen.MustNew()
+	repo := &mockTaskRepo{}
+	ui := &mockUI{}
+
+	// Empty skill resolver - skill won't be found.
+	skillResolver := newMockSkillResolver()
+
+	runtime, _, cleanup := createTestRuntimeWithMockWorker(sessionID, repo, ui)
+	defer cleanup()
+
+	executor := NewExecutorWithConfig(ExecutorConfig{
+		TaskRepo: repo,
+		UI:       ui,
+		Skills:   skillResolver,
+	})
+
+	sess := &ActiveSession{
+		Project: &domain.Project{
+			ID:         "test-project",
+			WorkingDir: tmpDir,
+		},
+		Session: &domain.Session{ID: sessionID},
+	}
+	sess.SetACPRuntime(runtime)
+	sess.SetACPSessionID("acp-session-123")
+
+	// Create task with nonexistent skill.
+	input := domain.TaskInput{
+		Prompt: "Run gatherer",
+		Skill:  "@codemint/does-not-exist",
+	}
+	inputJSON, _ := json.Marshal(input)
+
+	task := &domain.Task{
+		ID:      idgen.MustNew(),
+		Type:    domain.TaskTypeCoding,
+		Timeout: 1000,
+		Input:   sql.NullString{String: string(inputJSON), Valid: true},
+	}
+
+	// Execute - should return nil (graceful failure, doesn't kill scheduler).
+	err = executor.Execute(context.Background(), sess, task)
+	if err != nil {
+		t.Errorf("Execute should return nil for skill not found (task failure, not scheduler failure): %v", err)
+	}
+
+	// Verify task was marked as failed.
+	lastStatus := repo.updateStatusCalls[len(repo.updateStatusCalls)-1]
+	if lastStatus != domain.TaskStatusFailure {
+		t.Errorf("expected last status Failure, got %d", lastStatus)
+	}
+
+	// Verify structured error output.
+	if !task.Output.Valid {
+		t.Fatal("task output should be set")
+	}
+
+	var failureOutput TaskFailureOutput
+	if err := json.Unmarshal([]byte(task.Output.String), &failureOutput); err != nil {
+		t.Fatalf("failed to unmarshal failure output: %v", err)
+	}
+
+	if failureOutput.Error != FailureSentinelSkillNotFound {
+		t.Errorf("expected sentinel %q, got %q", FailureSentinelSkillNotFound, failureOutput.Error)
+	}
+	if failureOutput.Detail != "skill not found: @codemint/does-not-exist" {
+		t.Errorf("unexpected detail: %q", failureOutput.Detail)
+	}
+}
+
+// TestExecutor_Coding_SkillEmptyBody_FailsGracefully verifies that a skill with
+// empty instruction fails the task gracefully.
+func TestExecutor_Coding_SkillEmptyBody_FailsGracefully(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "executor_skill_empty_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sessionID := idgen.MustNew()
+	repo := &mockTaskRepo{}
+	ui := &mockUI{}
+
+	// Skill resolver with empty instruction.
+	skillResolver := newMockSkillResolver()
+	skillResolver.AddSkill("@codemint/empty", "") // Empty instruction
+
+	runtime, _, cleanup := createTestRuntimeWithMockWorker(sessionID, repo, ui)
+	defer cleanup()
+
+	executor := NewExecutorWithConfig(ExecutorConfig{
+		TaskRepo: repo,
+		UI:       ui,
+		Skills:   skillResolver,
+	})
+
+	sess := &ActiveSession{
+		Project: &domain.Project{
+			ID:         "test-project",
+			WorkingDir: tmpDir,
+		},
+		Session: &domain.Session{ID: sessionID},
+	}
+	sess.SetACPRuntime(runtime)
+	sess.SetACPSessionID("acp-session-123")
+
+	// Create task with skill that has empty body.
+	input := domain.TaskInput{
+		Prompt: "Run empty skill",
+		Skill:  "@codemint/empty",
+	}
+	inputJSON, _ := json.Marshal(input)
+
+	task := &domain.Task{
+		ID:      idgen.MustNew(),
+		Type:    domain.TaskTypeCoding,
+		Timeout: 1000,
+		Input:   sql.NullString{String: string(inputJSON), Valid: true},
+	}
+
+	// Execute - should return nil (graceful failure).
+	err = executor.Execute(context.Background(), sess, task)
+	if err != nil {
+		t.Errorf("Execute should return nil: %v", err)
+	}
+
+	// Verify task was marked as failed with correct sentinel.
+	var failureOutput TaskFailureOutput
+	if err := json.Unmarshal([]byte(task.Output.String), &failureOutput); err != nil {
+		t.Fatalf("failed to unmarshal failure output: %v", err)
+	}
+
+	if failureOutput.Error != FailureSentinelSkillNotFound {
+		t.Errorf("expected sentinel %q, got %q", FailureSentinelSkillNotFound, failureOutput.Error)
+	}
+	if failureOutput.Detail != "skill body empty: @codemint/empty" {
+		t.Errorf("unexpected detail: %q", failureOutput.Detail)
 	}
 }

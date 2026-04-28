@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"codemint.kanthorlabs.com/internal/domain"
+	"codemint.kanthorlabs.com/internal/skills"
 )
 
 // FileRegistry discovers and loads WORKFLOW.yaml files from multiple sources.
@@ -35,7 +36,11 @@ func NewFileRegistry() *FileRegistry {
 // LoadAll discovers and loads workflows from all configured sources.
 // External directories that do not exist are silently skipped.
 // Returns an error if any WORKFLOW.yaml file fails to parse.
-func (r *FileRegistry) LoadAll() error {
+//
+// If skillResolver is non-nil, all Story.Skill references are validated
+// against the registry. Workflows with unresolvable skill references are
+// rejected with an error (L1 validation per AC §2.0.5).
+func (r *FileRegistry) LoadAll(skillResolver skills.SkillResolver) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("workflow: resolve home dir: %w", err)
@@ -52,6 +57,35 @@ func (r *FileRegistry) LoadAll() error {
 		return fmt.Errorf("workflow: load embedded: %w", err)
 	}
 
+	// Validate all skill references if resolver is provided.
+	if skillResolver != nil {
+		if err := r.validateSkillReferences(skillResolver); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateSkillReferences checks that all Story.Skill references resolve
+// against the skills registry. Returns an error for the first unresolvable
+// reference, rejecting the entire workflow.
+func (r *FileRegistry) validateSkillReferences(resolver skills.SkillResolver) error {
+	for _, wf := range r.workflows {
+		for epicIdx, epic := range wf.Epics {
+			for storyIdx, story := range epic.Stories {
+				if story.Skill == "" {
+					continue // skill is optional
+				}
+				if _, ok := resolver.Get(story.Skill); !ok {
+					return fmt.Errorf(
+						"workflow %q references unknown skill %q at epic[%d].story[%d] %q",
+						wf.Name, story.Skill, epicIdx, storyIdx, story.ID,
+					)
+				}
+			}
+		}
+	}
 	return nil
 }
 

@@ -4,12 +4,36 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"codemint.kanthorlabs.com/internal/domain"
+	"codemint.kanthorlabs.com/internal/skills"
 )
+
+// mockSkillResolver implements skills.SkillResolver for testing.
+type mockSkillResolver struct {
+	skills map[string]domain.Skill
+}
+
+func newMockSkillResolver() *mockSkillResolver {
+	return &mockSkillResolver{skills: make(map[string]domain.Skill)}
+}
+
+func (m *mockSkillResolver) Get(id string) (domain.Skill, bool) {
+	s, ok := m.skills[id]
+	return s, ok
+}
+
+func (m *mockSkillResolver) AddSkill(id string) {
+	m.skills[id] = domain.Skill{ID: id, Name: id, Instruction: "test instruction"}
+}
+
+// Verify mockSkillResolver implements skills.SkillResolver.
+var _ skills.SkillResolver = (*mockSkillResolver)(nil)
 
 func TestFileRegistry_LoadAll(t *testing.T) {
 	t.Run("loads embedded workflows", func(t *testing.T) {
 		registry := NewFileRegistry()
-		if err := registry.LoadAll(); err != nil {
+		if err := registry.LoadAll(nil); err != nil {
 			t.Fatalf("LoadAll() error: %v", err)
 		}
 
@@ -57,7 +81,7 @@ epics:
 		}
 
 		registry := NewFileRegistry()
-		if err := registry.LoadAll(); err != nil {
+		if err := registry.LoadAll(nil); err != nil {
 			t.Fatalf("LoadAll() error: %v", err)
 		}
 
@@ -105,7 +129,7 @@ epics:
 		}
 
 		registry := NewFileRegistry()
-		if err := registry.LoadAll(); err != nil {
+		if err := registry.LoadAll(nil); err != nil {
 			t.Fatalf("LoadAll() error: %v", err)
 		}
 
@@ -127,7 +151,7 @@ epics:
 		defer os.Setenv("HOME", origHome)
 
 		registry := NewFileRegistry()
-		if err := registry.LoadAll(); err != nil {
+		if err := registry.LoadAll(nil); err != nil {
 			t.Fatalf("LoadAll() error: %v", err)
 		}
 
@@ -140,7 +164,7 @@ epics:
 
 func TestFileRegistry_Get(t *testing.T) {
 	registry := NewFileRegistry()
-	if err := registry.LoadAll(); err != nil {
+	if err := registry.LoadAll(nil); err != nil {
 		t.Fatalf("LoadAll() error: %v", err)
 	}
 
@@ -164,7 +188,7 @@ func TestFileRegistry_Get(t *testing.T) {
 
 func TestFileRegistry_All(t *testing.T) {
 	registry := NewFileRegistry()
-	if err := registry.LoadAll(); err != nil {
+	if err := registry.LoadAll(nil); err != nil {
 		t.Fatalf("LoadAll() error: %v", err)
 	}
 
@@ -183,7 +207,7 @@ func TestFileRegistry_All(t *testing.T) {
 
 func TestFileRegistry_Names(t *testing.T) {
 	registry := NewFileRegistry()
-	if err := registry.LoadAll(); err != nil {
+	if err := registry.LoadAll(nil); err != nil {
 		t.Fatalf("LoadAll() error: %v", err)
 	}
 
@@ -218,7 +242,7 @@ func TestFileRegistry_Len(t *testing.T) {
 		t.Errorf("Len() before LoadAll = %d, want 0", registry.Len())
 	}
 
-	if err := registry.LoadAll(); err != nil {
+	if err := registry.LoadAll(nil); err != nil {
 		t.Fatalf("LoadAll() error: %v", err)
 	}
 
@@ -244,4 +268,170 @@ func TestFileRegistry_loadDir_invalidWorkflow(t *testing.T) {
 	if err == nil {
 		t.Fatal("loadDir() expected error for invalid YAML, got nil")
 	}
+}
+
+// --- Task 2.0.5.4: L1 Skill Validation Tests ---
+
+func TestFileRegistry_LoadAll_ValidatesSkillReferences(t *testing.T) {
+	t.Run("rejects workflow with missing skill", func(t *testing.T) {
+		// Create temp home directory.
+		tmpHome := t.TempDir()
+		origHome := os.Getenv("HOME")
+		os.Setenv("HOME", tmpHome)
+		defer os.Setenv("HOME", origHome)
+
+		// Create workflow with a skill reference.
+		workflowDir := filepath.Join(tmpHome, ".local", "share", "codemint", "workflows", "test-skill")
+		if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+
+		content := `name: test-skill
+version: "1.0"
+description: Workflow with skill reference.
+epics:
+  - id: gather
+    name: "Gather"
+    stories:
+      - id: context
+        name: "Gather Context"
+        skill: "@codemint/missing-skill"
+`
+		if err := os.WriteFile(filepath.Join(workflowDir, "WORKFLOW.yaml"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+
+		// Create an empty skill resolver (skill won't be found).
+		resolver := newMockSkillResolver()
+
+		registry := NewFileRegistry()
+		err := registry.LoadAll(resolver)
+		if err == nil {
+			t.Fatal("LoadAll() expected error for missing skill, got nil")
+		}
+
+		// Verify error message mentions the missing skill.
+		expectedSubstr := `unknown skill "@codemint/missing-skill"`
+		if !contains(err.Error(), expectedSubstr) {
+			t.Errorf("error = %q, want to contain %q", err.Error(), expectedSubstr)
+		}
+	})
+
+	t.Run("accepts workflow with valid skill", func(t *testing.T) {
+		// Create temp home directory.
+		tmpHome := t.TempDir()
+		origHome := os.Getenv("HOME")
+		os.Setenv("HOME", tmpHome)
+		defer os.Setenv("HOME", origHome)
+
+		// Create workflow with a skill reference.
+		workflowDir := filepath.Join(tmpHome, ".local", "share", "codemint", "workflows", "test-skill")
+		if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+
+		content := `name: test-skill
+version: "1.0"
+description: Workflow with skill reference.
+epics:
+  - id: gather
+    name: "Gather"
+    stories:
+      - id: context
+        name: "Gather Context"
+        skill: "@codemint/gatherer"
+`
+		if err := os.WriteFile(filepath.Join(workflowDir, "WORKFLOW.yaml"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+
+		// Create skill resolver with the referenced skill AND skills used by embedded workflows.
+		resolver := newMockSkillResolver()
+		resolver.AddSkill("@codemint/gatherer")
+		resolver.AddSkill("@codemint/spec-writer")     // Used by embedded brainstorming
+		resolver.AddSkill("@codemint/task-generator")  // Used by embedded brainstorming
+
+		registry := NewFileRegistry()
+		err := registry.LoadAll(resolver)
+		if err != nil {
+			t.Fatalf("LoadAll() error: %v", err)
+		}
+
+		// Workflow should be loaded.
+		_, ok := registry.Get("test-skill")
+		if !ok {
+			t.Error("Get(test-skill) returned false, want true")
+		}
+	})
+
+	t.Run("accepts workflow without skills (nil resolver)", func(t *testing.T) {
+		registry := NewFileRegistry()
+		err := registry.LoadAll(nil) // nil resolver skips validation
+		if err != nil {
+			t.Fatalf("LoadAll(nil) error: %v", err)
+		}
+		if registry.Len() == 0 {
+			t.Error("Len() = 0, want > 0")
+		}
+	})
+
+	t.Run("accepts story without skill", func(t *testing.T) {
+		// Create temp home directory.
+		tmpHome := t.TempDir()
+		origHome := os.Getenv("HOME")
+		os.Setenv("HOME", tmpHome)
+		defer os.Setenv("HOME", origHome)
+
+		// Create workflow without skill references.
+		workflowDir := filepath.Join(tmpHome, ".local", "share", "codemint", "workflows", "no-skill")
+		if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+
+		content := `name: no-skill
+version: "1.0"
+description: Workflow without skills.
+epics:
+  - id: main
+    name: "Main"
+    stories:
+      - id: step1
+        name: "Step One"
+`
+		if err := os.WriteFile(filepath.Join(workflowDir, "WORKFLOW.yaml"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+
+		// Resolver with skills for embedded brainstorming workflow.
+		resolver := newMockSkillResolver()
+		resolver.AddSkill("@codemint/gatherer")
+		resolver.AddSkill("@codemint/spec-writer")
+		resolver.AddSkill("@codemint/task-generator")
+
+		registry := NewFileRegistry()
+		err := registry.LoadAll(resolver)
+		if err != nil {
+			t.Fatalf("LoadAll() error: %v", err)
+		}
+
+		_, ok := registry.Get("no-skill")
+		if !ok {
+			t.Error("Get(no-skill) returned false, want true")
+		}
+	})
+}
+
+// contains checks if substr is in s.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && s != substr && containsHelper(s, substr)))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
