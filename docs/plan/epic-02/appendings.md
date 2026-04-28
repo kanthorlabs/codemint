@@ -1,20 +1,63 @@
 # EPIC-02 Appending Tasks
 
-Cross-cutting work that doesn't belong to one user story but blocks or de-risks EPIC-02 as a whole. Pick up in priority order.
+Cross-cutting work that doesn't belong to one user story but applies across EPIC-02. Pick up alongside the story spine in `epic-02.md`.
 
-**Authoritative spec source:** `https://agentclientprotocol.com/protocol/schema.md`. Spec index mirrored at `docs/coding/agent-client-protocol.md`. The OpenAPI URL is 404 — do not use it.
+**Authoritative ACP spec:** `https://agentclientprotocol.com/protocol/schema.md`. Mirrored at `docs/coding/agent-client-protocol.md`. The OpenAPI URL is 404 — do not use it.
 
 ---
 
-## Status snapshot (2026-04-27)
+## Status snapshot (2026-04-28, post-redesign)
 
 | Story | State |
 |---|---|
-| 2.0 CodeMint project & session bootstrap | **Done** (see `2.0-.../tasks.md`, `hotfix.md`, `retro.md`) |
-| 2.9 YOLO agent seed | **Done** (`agentRepo.EnsureSystemAgents` seeds `sys-auto-approve`) |
-| 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.10, 2.11, 2.12, 2.13 | **Not started** (only `index.md`, no `tasks.md`) |
+| 2.0 CodeMint project & session bootstrap | **Done** |
+| 2.0.1 Workflow File Infrastructure | **Done** |
+| 2.0.2 Task Routing & Conditional Execution | **Done** |
+| 2.0.3 Workflow Execution State | **Done** |
+| 2.0.4 Workflow Command | **Done** |
+| 2.0.5 Skill Injection | **Done** |
+| 2.1 Project Overview | **Not started** |
+| 2.2 Goal Capture | **Not started** |
+| 2.3 Goal-scoped Reality | **Not started** |
+| 2.4 Options + Confirm Loop | **Not started** |
+| 2.5 Plan Generation | **Not started** |
+| 2.6 Verification Guardrail | **Not started** |
+| 2.7 Confirmation Guardrail | **Not started** |
+| 2.8 Error Escalation | **Not started** |
+| 2.9 YOLO agent seed | **Done** |
+| 2.10 YOLO Delegation | **Not started** |
 
-The Brainstormer pipeline (Phase 1–5) is the long pole. None of those stories should start until Task A below lands — the ACP wire is too non-conformant to build on safely.
+---
+
+## Cross-cutting concern A — Verbosity respect (P1)
+
+Every story in 2.1–2.8 produces user-visible progress output. All of it must be filtered through a single verbosity level.
+
+**Levels (proposed; concrete enum lives in a future `/verbosity` command story, not in EPIC-02):**
+
+| Level | What surfaces |
+|---|---|
+| `quiet`   | Errors only. Phase transitions silent. |
+| `normal`  | One line per phase entry/exit. Errors. Confirmation prompts. |
+| `verbose` | Adds skill-level intermediate messages, tool calls, file reads. |
+| `debug`   | Adds raw ACP `session/update` events. |
+
+**What to do per story.** Every render path that today writes directly to `mediator.RenderMessage` must accept a verbosity threshold and skip below-threshold messages. There is no separate verbosity story in the spine — each story owns its own rendering decisions, and all of them honor the level set by `/verbosity` (TBD command).
+
+**Default:** `normal`. Persisted on the session row when the command lands.
+
+**Verification.** Manual: run a workflow at each level; lower levels strictly subset higher levels.
+
+---
+
+## Cross-cutting concern B — Error escalation contract (P0)
+
+Specified in detail by **Story 2.8 Error Escalation**. Summary of the cross-cutting contract every other story must respect:
+
+1. Setting `task.status = Failure` is the **only** failure signal. Don't return errors out of skill handlers; convert to task failure.
+2. The scheduler observes `Failure`, reassigns the task to the session's Human Agent, transitions session to `Awaiting`, and halts.
+3. Stories 2.6 and 2.7 already produce Failure on their own logic (test exit-code, user reject). Story 2.5 may produce Failure if plan JSON is malformed. Stories 2.1–2.4 may produce Failure on skill output validation errors.
+4. Resolution flows back through the `/resolve` command (defined in 2.8). No story should add its own retry / skip / abort UI.
 
 ---
 
@@ -31,14 +74,14 @@ Story 2.0 surfaced four wire-level bugs at integration time (`protocolVersion`, 
 - `SessionPromptParams`: drop `context` and `tools` (not in spec); context goes through `resource_link` / `resource` ContentBlocks or via MCP.
 - `SessionPromptResult`: replace `success` with `stopReason: StopReason`.
 - `ContentBlock`: typed discriminated union for `text|image|audio|resource|resource_link` (today only `text` round-trips).
-- `PermissionRequest` / `PermissionResponse`: rewrite to spec shapes (`{sessionId, toolCall: ToolCallUpdate, options: PermissionOption[]}` and `{outcome: cancelled | {outcome:"selected", optionId}}`). Today's shape (`requestId`, `granted`, `tool`, `parameters`) is invented.
+- `PermissionRequest` / `PermissionResponse`: rewrite to spec shapes (`{sessionId, toolCall: ToolCallUpdate, options: PermissionOption[]}` and `{outcome: cancelled | {outcome:"selected", optionId}}`).
 - `PermissionOption.kind` enum: `allow_once | allow_always | reject_once | reject_always`.
-- `UpdateKind` constants: re-derive from the spec union (`ContentChunk`, `ToolCallUpdate`, `Plan`, `AvailableCommandsUpdate`, `ConfigOptionUpdate`, `CurrentModeUpdate`). Today's `agent_message_chunk` etc. need verifying against actual spec discriminators.
+- `UpdateKind` constants: re-derive from the spec union (`ContentChunk`, `ToolCallUpdate`, `Plan`, `AvailableCommandsUpdate`, `ConfigOptionUpdate`, `CurrentModeUpdate`).
 - ACP error codes: `-32000 auth_required`, `-32002 resource not found` — define and surface.
 
 **How to verify.**
-1. Add round-trip unit tests in `internal/acp/protocol_test.go`: marshal → unmarshal → assert field-by-field equality for every typed payload. One sub-test per type.
-2. Add golden fixtures: hand-author one canonical JSON-RPC frame per method (`initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/update`, `session/request_permission`) using snippets copied verbatim from `protocol/schema.md`. Decode through our types, re-encode, assert byte-equal modulo key ordering.
+1. Add round-trip unit tests in `internal/acp/protocol_test.go`.
+2. Add golden fixtures: hand-author one canonical JSON-RPC frame per method using snippets copied verbatim from `protocol/schema.md`.
 3. `make test ./...` green after every call site is updated.
 
 **Success state.** Every JSON key, required field, and enum value in `internal/acp/protocol.go` has a 1:1 match in `protocol/schema.md`. No invented fields remain. Golden fixtures pass.
@@ -47,57 +90,63 @@ Story 2.0 surfaced four wire-level bugs at integration time (`protocolVersion`, 
 
 ## Task B — ACP feature coverage map (P1)
 
-The team needs a single page that says "yes / partial / no" for every protocol feature so future EPIC-02 story authors don't have to re-read the spec.
+The team needs a single page that says "yes / partial / no" for every protocol feature so future story authors don't have to re-read the spec.
 
 **What to do.** Produce `docs/coding/acp-coverage.md` with one row per spec page (Initialization, Session Setup, Prompt Turn, Tool Calls, Permissions, Slash Commands, Terminals, File System, Session List/Resume/Close, Session Modes, Session Config Options, Agent Plan, Content, Extensibility). Mark each **Have / Partial / Missing / Out-of-scope** with a one-line note and a link to the implementing file (or to the EPIC-02 story that will add it).
 
-This is documentation, not code.
-
-**How to verify.** A teammate not on this PR can answer "does CodeMint support X?" for any X in the spec by `grep`-ing one file. PR review spot-checks three random "Have" rows against the cited code.
-
-**Success state.** `acp-coverage.md` exists. Every spec page has a row. Every Have/Partial row links to a file path. Every Missing row links to an epic-02 story (or notes "no story yet").
+**Success state.** `acp-coverage.md` exists. Every spec page has a row. Every Have/Partial row links to a file path. Every Missing row links to a story (or notes "no story yet").
 
 ---
 
 ## Task C — ACP wire conformance harness (P1, depends on A)
 
-Schema fixes (Task A) protect against type drift. They do not protect against semantic regressions — wrong state machine, missing handshake step, wrong notification ordering. We need a harness that pokes a real agent.
+Schema fixes (Task A) protect against type drift. They do not protect against semantic regressions. We need a harness that pokes a real agent.
 
-**What to do.** Add `make acp-conform`. It boots a real ACP agent (start with OpenCode — the provider we ship), runs the happy path `initialize → session/new → session/prompt → session/cancel`, and asserts:
+**What to do.** Add `make acp-conform`. It boots a real ACP agent (start with OpenCode), runs the happy path `initialize → session/new → session/prompt → session/cancel`, and asserts:
 
 1. `initialize` is accepted (no `-32600`, no `-32602`).
 2. `session/new` returns a `sessionId`.
 3. `session/prompt` produces at least one `session/update` notification.
-4. `session/cancel` is accepted as a notification (no `id`, no response expected).
+4. `session/cancel` is accepted as a notification.
 5. Final `stopReason` is one of the spec's enumerated values.
 
-Skip cleanly if the OpenCode binary isn't on `PATH` — `t.Skip` with a clear message. Optionally gate on `CODEMINT_ACP_CONFORM=1` so the harness doesn't run on every `go test` by default.
+Skip cleanly if the OpenCode binary isn't on `PATH`. Gate on `CODEMINT_ACP_CONFORM=1` so it doesn't run on every `go test`.
 
-**How to verify.** `CODEMINT_ACP_CONFORM=1 make acp-conform` passes locally with OpenCode installed. Without the env var, the test is skipped and `make test` is unaffected.
-
-**Success state.** Any change to `internal/acp/` triggers this harness in pre-merge or local dev and gives a yes/no wire signal. The harness is parameterizable to add Codex and Claude Code later (not required for v1).
+**Success state.** Any change to `internal/acp/` triggers this harness in pre-merge or local dev.
 
 ---
 
 ## Task D — Planning-template guardrail (P2, process)
 
-Story 2.0's retro identified the root cause of the integration bugs as planning-side, not coding-side. Lock it in.
+Story 2.0's retro identified the root cause of the integration bugs as planning-side. Lock it in.
 
-**What to do.** Add a clause to the planning template (or `CLAUDE.md` Working Styles) requiring that any task touching `internal/acp/` must:
+**What to do.** Add a clause to the planning template (or `CLAUDE.md` Working Styles): any task touching `internal/acp/` must:
 
 1. Cite the relevant spec section by URL in the task description.
 2. Include in its verification clause both: "schema diff is empty for the touched types" and "ACP wire conformance harness passes."
 
-**How to verify.** First post-2.0 ACP-touching task after this lands has both clauses present at PR review.
-
-**Success state.** No future EPIC-02 story discovers an ACP wire bug at integration time. (That is the actual goal; A/B/C are how we get there. D keeps us there.)
+**Success state.** No future EPIC-02 story discovers an ACP wire bug at integration time.
 
 ---
 
-## Priority
+## Priority & Dependencies
 
-A → unblocks 2.1, 2.4, 2.7, 2.8, 2.13 (anything that sends task payloads to ACP).
-A → unblocks 2.2 (Living Spec → ACP `session/prompt` body shape).
-A → unblocks 2.10 (YOLO Confirmation auto-approve must round-trip through correct PermissionResponse).
+```
+                    Task A (ACP Schema)
+                          │
+        ┌─────────────────┼─────────────────┐
+        ▼                 ▼                 ▼
+   Task B (Coverage)  Task C (Harness)  Task D (Process)
+        │                 │
+        └────────┬────────┘
+                 │
+                 ▼
+   ┌───────── Coding Workflow spine ──────────┐
+   │ 2.1 → 2.2 → 2.3 → 2.4 ─/modify→ 2.2     │
+   │                       └/pick→ 2.5        │
+   │ 2.5 → [scheduler] → 2.6 + 2.7 per story │
+   │ any Failure → 2.8                        │
+   └──────────────────────────────────────────┘
+```
 
-B and C can run in parallel with A or right after. D is one-line policy.
+**Critical path:** Task A → 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 → 2.7 → 2.8.

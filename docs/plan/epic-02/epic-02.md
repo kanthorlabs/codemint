@@ -1,118 +1,151 @@
-# CodeMint User Stories: EPIC-02 (The Brainstorming Workflow)
+# CodeMint User Stories: EPIC-02 (Coding Workflow)
 
-## Group 1: The 5-Phase Brainstorming Pipeline
+## Goal
 
-**User Story 2.1: Phase 1 - Context Intake (The Gatherer)**
-* **As the** Go Orchestrator,
-* **I want** the Gatherer Agent to read directory trees and key files before brainstorming starts,
-* **So that** the AI is grounded in the reality of the codebase.
-* *Acceptance Criteria:*
-    * The system reads the project directory tree and passes it to the LLM.
-    * Logic is structured to allow future iteration into a "Targeted Grep Gatherer" to save context tokens.
+A working **Coding Workflow** the user can run immediately. Eight phases, GROW-aligned, scoped tightly to v1 — no EPIC-03 / EPIC-04 / EPIC-05 plumbing in scope.
 
-**User Story 2.2: Phase 2 - The Living Spec (Clarification)**
-* **As the** Coordinator Agent,
-* **I want to** maintain a `specification.md` document in memory during the chat phase,
-* **So that** I prevent infinite chat loops and hallucinations.
-* *Acceptance Criteria:*
-    * The system silently updates the `specification.md` document as decisions are made during the chat.
-    * The chat loop continues until the user explicitly triggers the `[Generate Plan]` action.
+> **2026-04-28 redesign.** The earlier 11-story GROW pipeline (2.1–2.7 + 2.x.1 inserts) was scrapped: it sprawled, mixed v1 and v2 concerns, and lost the user's control over scope. The new spine maps 1:1 onto the spec below.
 
-**User Story 2.3: Phase 3 - Hierarchical Task Generation**
-* **As the** Task Generator Agent,
-* **I want to** read the Living Spec and output an executable plan in an Epic -> Story -> Task format,
-* **So that** I create a sequential, linear execution plan.
-* *Acceptance Criteria:*
-    * Tasks are inserted into SQLite using integers for `seq_epic`, `seq_story`, and `seq_task` to ensure strict ordering.
-    * The Go scheduler is explicitly programmed to forbid parallel execution of these tasks to prevent Git conflicts.
+## Spec (authoritative)
 
-**User Story 2.4: Phase 4 - Verification Guardrail**
-* **As the** Task Generator Agent,
-* **I want to** strictly append a Verification Task (Type 1) at the end of every User Story,
-* **So that** the syntax and logic are automatically checked (e.g., via `go test ./...`) before human review.
-* *Acceptance Criteria:*
-    * The AI's generated task array always includes a task with `type = 1` right before the end of a `seq_story` block.
-    * This task is assigned to the Assistant agent.
+```
+1. Project Overview                       → 2.1
+2. Clarify Goals       → GOAL             → 2.2
+3. Goal-scoped context → REALITY          → 2.3
+4. Suggest solutions   → OPTIONS          → 2.4
+   5.1 user /modify  → back to #2 (Goal)
+   5.2 user /confirm → next
+6. Generate plan       → WAY FORWARD      → 2.5
+   6.1 EPIC list   → DB
+   6.2 STORY list  → DB
+   6.3 TASK list   → DB
+   6.4 Append SYSTEM-TASK: Verification + Confirmation
+7. Worker picks first TASK; runs until a SYSTEM-TASK
+8.1 If Verification    → run strategy     → 2.6
+8.2 If Confirmation    → user / YOLO      → 2.7
+```
 
-**User Story 2.5: Phase 4 - Confirmation Guardrail**
-* **As the** Task Generator Agent,
-* **I want to** append a Confirmation Task (Type 2) as the final step of every User Story,
-* **So that** the execution safely pauses for manual approval.
-* *Acceptance Criteria:*
-    * A task with `type = 2` is inserted as the absolute final task of a `seq_story` block.
-    * This task is assigned to the seeded `human` agent, which naturally shifts the session to `awaiting`.
+Cross-cutting (see `appendings.md`):
 
-**User Story 2.6: Phase 4 - Epic Retrospective Guardrail**
-* **As the** Task Generator Agent,
-* **I want to** append a Retrospective Task (Type 4) as the absolute final step of every Epic,
-* **So that** the human can be politely asked for overarching feedback after a large batch of work is done.
-* *Acceptance Criteria:*
-    * A task with `type = 4` is inserted as the final task of a `seq_epic` block.
-    * This task is assigned to the seeded `human` agent.
-    * The UI presents a skippable, conversational prompt to the user (e.g., "Did I do anything annoying?").
-    * User input (if provided) is saved to the `output` column of the task to be processed by the Archivist.
+- All progress reporting respects the `/verbosity` level (separate command, not a story).
+- Any task `Failure` → reassign to **Human Agent**, pause workflow until human resolves → 2.8.
 
-**User Story 2.7: Phase 5 - Human Review & Activation**
-* **As a** Developer,
-* **I want to** review the generated list of tasks before they are queued for execution,
-* **So that** I have final approval over the AI's plan.
-* *Acceptance Criteria:*
-    * The UI (TUI/CUI) renders the generated hierarchical list.
-    * The user can approve, remove, or refine tasks.
-    * Once activated, tasks are committed to SQLite with `status = 0` (pending).
+## Spine
 
----
+| #     | Story                            | State        |
+|-------|----------------------------------|--------------|
+| 2.0   | Project & Session Bootstrap      | Done         |
+| 2.0.1 | Workflow File Infrastructure     | Done         |
+| 2.0.2 | Task Routing & Conditions        | Done         |
+| 2.0.3 | Workflow Execution State         | Done         |
+| 2.0.4 | Workflow Command                 | Done         |
+| 2.0.5 | Skill Injection                  | Done         |
+| 2.1   | Project Overview                 | Not started  |
+| 2.2   | Goal Capture                     | Not started  |
+| 2.3   | Goal-scoped Reality              | Not started  |
+| 2.4   | Options + Confirm Loop           | Not started  |
+| 2.5   | Plan Generation                  | Not started  |
+| 2.6   | Verification Guardrail           | Not started  |
+| 2.7   | Confirmation Guardrail           | Not started  |
+| 2.8   | Error Escalation                 | Not started  |
+| 2.9   | YOLO Agent Seed                  | Done         |
+| 2.10  | YOLO Delegation                  | Not started  |
 
-## Group 2: Advanced Workflow Features
+## WORKFLOW.yaml execution order
 
-**User Story 2.8: Mid-Flight Pivots (Dynamic Replanning)**
-* **As a** Developer,
-* **I want to** select specific pending tasks and instruct the AI to rewrite them mid-execution,
-* **So that** I can change my mind without restarting the entire session.
-* *Acceptance Criteria:*
-    * The UI displays pending tasks for either the current User Story or the Entire Backlog.
-    * The user can multi-select tasks to edit.
-    * The user provides a natural language prompt, and the AI rewrites the selected tasks, directly updating the `pending` rows in SQLite.
+```
+2.1 overview
+  └── 2.2 goal_capture          ← /modify loops here
+        └── 2.3 reality
+              └── 2.4 options_and_confirm
+                    │  /modify     → 2.2
+                    │  /pick-option → 2.5
+                    └── 2.5 plan
+                          └── [scheduler runs each TASK]
+                                ├── 2.6 verify  (auto-injected per story)
+                                └── 2.7 confirm (auto-injected per story)
+                                      │
+                              any Failure → 2.8 escalate
+```
 
-**User Story 2.9: The YOLO Agent Seed**
-* **As the** Go Orchestrator,
-* **I want to** seed a special `sys-auto-approve` agent into the `agent` table on bootstrap,
-* **So that** CodeMint can support fully autonomous execution without changing the database schema.
-* *Acceptance Criteria:*
-    * The `agent` table initializes with an entry where `name` = "sys-auto-approve".
+## Stories
 
-**User Story 2.10: YOLO Mode Delegation**
-* **As a** Developer,
-* **I want to** delegate specific Epics or Stories to the YOLO Agent,
-* **So that** execution continues autonomously without pausing for my confirmation.
-* *Acceptance Criteria:*
-    * The UI exposes a `[Delegate to Auto Approval]` action for Epics or Stories.
-    * CodeMint updates the `assignee_id` of the target Confirmation tasks to the `sys-auto-approve` UUID.
-    * When the Go scheduler reaches a task assigned to this agent, it instantly marks it as `success` with a note bypassing the human pause.
+### 2.1 Project Overview
+See `2.1-project-overview/index.md`.
 
----
+Cheap full-tree pass: directory tree + a small fixed key-file set (`README.md`, `go.mod`, `Makefile`, top-level `package.json` / `pyproject.toml`). No grep, no recursive reads. Output is structured so 2.3 can append.
 
-## Group 3: Cross-Epic Support Integrations
+### 2.2 Goal Capture
+See `2.2-goal-capture/index.md`.
 
-**User Story 2.11: LLM Wiki Context Injection (Supports EPIC-05)**
-* **As the** Go Orchestrator,
-* **I want to** inject the "Hot" Wiki files (`preferences.md`, `decisions.md`, `bugs/index.md`) into the Brainstormer Agent's system prompt during Phase 1,
-* **So that** the Task Generator respects the project's historical decisions and doesn't repeat past mistakes.
-* *Acceptance Criteria:*
-    * Before the LLM generates the task list, it reads `~/.local/share/codemint/memory/<project_id>/`.
-    * The System Prompt strictly enforces the Hierarchy of Authority: Current Prompt > Project Memory > Global Rules.
+Two passes: (1) one-sentence goal, (2) 1–5 testable success criteria. User locks via `/lock-goal`. Writes `workflow.goal_text` + `workflow.success_criteria` (columns from 2.0.3). Re-entered when user runs `/modify` in 2.4.
 
-**User Story 2.12: The Clarifier Agent Handoff (Supports EPIC-04)**
-* **As the** Go Orchestrator,
-* **I want to** explicitly route Mid-Flight Pivots to the dedicated `Clarifier Agent`,
-* **So that** natural language revisions are correctly translated into database `UPDATE` queries for existing tasks without hallucinating new scopes.
-* *Acceptance Criteria:*
-    * When a user clicks `[ ✏️ Revise ]`, the UI prompts: "What should I change?".
-    * The user's reply is sent specifically to the Clarifier Agent, which directly overwrites the target SQLite rows and generates a new draft for the UI.
+### 2.3 Goal-scoped Reality
+See `2.3-goal-scoped-reality/index.md`.
 
-**User Story 2.13: ACP-Compliant Payload Formatting (Supports EPIC-03)**
-* **As the** Task Generator Agent,
-* **I want to** format the generated tasks' `input` field as structured JSON,
-* **So that** the Persistent ACP Worker (OpenCode) can seamlessly parse the request over standard I/O.
-* *Acceptance Criteria:*
-    * The `input` column in the database is populated with a JSON blob containing the context and prompt, not just raw text strings.
+Second pass, scoped to the locked Goal: grep keywords, read top hits, follow at most one import hop. Bounded by ~30k-token budget. Skips cleanly for greenfield Goals. Output appended to 2.1's structured context.
+
+### 2.4 Options + Confirm Loop
+See `2.4-options-and-confirm/index.md`.
+
+Proposes 2–3 candidate approaches with tradeoffs (or 1 with explicit rationale).
+
+- `/pick-option <id>` → writes `workflow.chosen_option`, advances to 2.5.
+- `/modify` → clears `goal_text` + `success_criteria` + `chosen_option`, re-runs 2.2 → 2.3 → 2.4.
+
+### 2.5 Plan Generation
+See `2.5-plan-generation/index.md`.
+
+Reads `chosen_option`, emits an Epic → Story → Task JSON plan. Tasks inserted into SQLite with `seq_epic`/`seq_story`/`seq_task` (flat schema, no Epic/Story tables). Auto-injects 2.6 Verification + 2.7 Confirmation per story.
+
+### 2.6 Verification Guardrail
+See `2.6-verification-guardrail/index.md`.
+
+Auto-injected after each coding story. `TaskTypeVerification`. Runs configured command (default `go test ./...`). Non-zero exit → task `Failure` → 2.8 Error Escalation.
+
+### 2.7 Confirmation Guardrail
+See `2.7-confirmation-guardrail/index.md`.
+
+Auto-injected at end of each story. `TaskTypeConfirmation`. Assigned to Human Agent (or `sys-auto-approve` under YOLO). Session transitions to `Awaiting`. Reject → task `Failure` → 2.8 Error Escalation.
+
+### 2.8 Error Escalation
+See `2.8-error-escalation/index.md`.
+
+Any task that lands in `Failure` is automatically reassigned to the session's Human Agent. Scheduler halts. Human resolves via `/resolve retry|skip|abort`.
+
+### 2.9 YOLO Agent Seed (DONE)
+`agentRepo.EnsureSystemAgents` seeds `sys-auto-approve`.
+
+### 2.10 YOLO Delegation
+See `2.10-yolo-mode-delegation/index.md`.
+
+`/yolo epic <id>` / `/yolo story <id>` reassigns that scope's Confirmation tasks (2.7) to `sys-auto-approve`. Scheduler auto-Successes those gates. Coding (2.5 outputs) and Verification (2.6) are unaffected.
+
+## What was dropped (2026-04-28 redesign)
+
+| Old story | Drop reason |
+|---|---|
+| 2.2 Living Spec | Clarification absorbed by 2.2 Goal + 2.3 Reality + 2.4 /modify loop. |
+| 2.4.1 Goal Verification | Out of scope for v1; 2.6 covers story-level correctness. |
+| 2.6 Epic Retrospective | EPIC-05 territory. |
+| 2.7 Human Review & Activation | Confirm gate is 2.4 itself; no separate activation step. |
+| 2.8 Mid-Flight Pivots | The 2.4 `/modify` loop is the only pivot v1 supports. |
+| 2.11 Wiki Injection | EPIC-05 support. |
+| 2.12 Clarifier Handoff | EPIC-04 support. |
+| 2.13 ACP Payload | EPIC-03 support. |
+
+The corresponding folders were removed from `docs/plan/epic-02/` in the same redesign commit.
+
+## Priority
+
+| Priority | Story | Rationale |
+|---|---|---|
+| P0 | 2.1 | First step of every workflow run |
+| P0 | 2.2 | GROW Goal — anchors everything downstream |
+| P0 | 2.3 | GROW Reality — feeds Options |
+| P0 | 2.4 | GROW Options + the `/modify` loop |
+| P0 | 2.5 | Plan generation; produces the executable backlog |
+| P0 | 2.6 | Per-story correctness gate |
+| P0 | 2.7 | Per-story approval gate |
+| P0 | 2.8 | Error escalation — required by appendings |
+| P1 | 2.10 | YOLO autonomy — quality-of-life |

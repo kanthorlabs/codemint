@@ -22,6 +22,7 @@ TODO:
 
 - ID pattern: <entity-id>-<uuid-v7>. For example, `task-123e4567-e89b-12d3-a456-426614174000`, `session-123e4567-e89b-12d3-a456-426614174000`, `project-123e4567-e89b-12d3-a456-426614174000`.
 - Don't use harcode text, use constants or enums instead. For example, use `ProjectKindCoding` instead of "coding", `TaskTypeCoding` instead of "coding", `ProviderOpenCode` instead of "opencode", etc.
+- Use [Go Validator](https://github.com/go-playground/validator) for struct validation, and define custom validation tags if needed. For example, `validate:"required,uuidv7"` for UUID fields, `validate:"required,oneof=coding code_mint"` for project kind, etc.
 
 ## Agent Notes
 
@@ -31,4 +32,9 @@ TODO:
 
 ## ACP Spec Conformance
 
-EPIC-02-scoped. See `docs/plan/epic-02/appendings.md` for the full task list (A: schema audit, B: coverage map, C: wire conformance harness, D: planning guardrail). Top priority — blocks the Brainstormer pipeline.
+EPIC-02-scoped. See `docs/plan/epic-02/appendings.md` for the full task list (A: schema audit, B: coverage map, C: wire conformance harness, D: planning guardrail). Top priority — blocks the Coding Workflow spine (2.1 → 2.8).
+
+## Coding Workflow cross-cuts (EPIC-02)
+
+- **Verbosity respect.** Every story (2.1–2.8) renders user-visible progress through a single `/verbosity` filter (`quiet | normal | verbose | debug`). Default `normal`. Level setter is a separate command, not a story. See `docs/plan/epic-02/appendings.md` § "Cross-cutting concern A".
+- **Error escalation.** Any task `Failure` is reassigned to the session's Human Agent and pauses the workflow until `/resolve retry|skip|abort`. Specified by Story 2.8; every other story converts errors to `Failure` rather than handling them locally.
