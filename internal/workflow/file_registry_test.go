@@ -306,6 +306,7 @@ epics:
 		// Add skills required by the embedded brainstorming workflow to pass validation.
 		resolver.AddSkill("@codemint/gatherer")
 		resolver.AddSkill("@codemint/goal-capture")
+		resolver.AddSkill("@codemint/targeted-gatherer")
 
 		registry := NewFileRegistry()
 		err := registry.LoadAll(resolver)
@@ -351,7 +352,8 @@ epics:
 		// Create skill resolver with the referenced skill AND skills used by embedded workflows.
 		resolver := newMockSkillResolver()
 		resolver.AddSkill("@codemint/gatherer")
-		resolver.AddSkill("@codemint/goal-capture")    // Used by embedded brainstorming
+		resolver.AddSkill("@codemint/goal-capture")         // Used by embedded brainstorming
+		resolver.AddSkill("@codemint/targeted-gatherer")    // Used by embedded brainstorming
 
 		registry := NewFileRegistry()
 		err := registry.LoadAll(resolver)
@@ -408,6 +410,7 @@ epics:
 		resolver := newMockSkillResolver()
 		resolver.AddSkill("@codemint/gatherer")
 		resolver.AddSkill("@codemint/goal-capture")
+		resolver.AddSkill("@codemint/targeted-gatherer")
 
 		registry := NewFileRegistry()
 		err := registry.LoadAll(resolver)

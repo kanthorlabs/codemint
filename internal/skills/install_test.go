@@ -445,6 +445,70 @@ func TestGoalCaptureSkillLoads(t *testing.T) {
 	}
 }
 
+func TestTargetedGathererSkillLoads(t *testing.T) {
+	// This test verifies the targeted-gatherer skill is properly embedded and loads.
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// Install and load.
+	installed, err := InstallSystemSkills()
+	if err != nil {
+		t.Fatalf("InstallSystemSkills() error = %v", err)
+	}
+
+	// Verify targeted-gatherer is in installed list.
+	hasTargetedGatherer := false
+	for _, name := range installed {
+		if name == "targeted-gatherer" {
+			hasTargetedGatherer = true
+			break
+		}
+	}
+	if !hasTargetedGatherer {
+		t.Fatalf("expected targeted-gatherer to be in installed skills, got: %v", installed)
+	}
+
+	reg := NewRegistry()
+	if err := reg.LoadAll(); err != nil {
+		t.Fatalf("Registry.LoadAll() error = %v", err)
+	}
+
+	// Get targeted-gatherer skill by name.
+	skill, ok := reg.GetByName("targeted-gatherer")
+	if !ok {
+		t.Fatal("expected targeted-gatherer skill to be registered")
+	}
+
+	// Verify skill properties.
+	if skill.Name != "targeted-gatherer" {
+		t.Errorf("skill.Name = %q, want %q", skill.Name, "targeted-gatherer")
+	}
+	if skill.Description == "" {
+		t.Error("skill.Description should not be empty")
+	}
+	if skill.Instruction == "" {
+		t.Error("skill.Instruction should not be empty")
+	}
+
+	// Verify body contains expected content (keyword hits, files read, skip condition).
+	expectedPhrases := []string{
+		"keyword_hits",
+		"files_read",
+		"token_budget_used",
+		"skipped",
+		"greenfield",
+		"goal_text",
+		"success_criteria",
+	}
+	for _, phrase := range expectedPhrases {
+		if !strings.Contains(skill.Instruction, phrase) {
+			t.Errorf("targeted-gatherer skill body should contain %q", phrase)
+		}
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

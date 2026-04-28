@@ -33,3 +33,11 @@ epics:
           command: "/lock-goal"
         output:
           handler: "lock_workflow_goal"
+
+      - id: gather_targeted
+        name: "Goal-scoped Reality"
+        skill: "@codemint/targeted-gatherer"
+        type: coding
+        depends_on: capture_goal
+        output:
+          handler: "append_targeted_context"

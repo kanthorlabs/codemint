@@ -88,7 +88,8 @@ func LockWorkflowGoalHandler(repo repository.WorkflowRepository) HandlerFunc {
 // Call this during application startup to make handlers available to the orchestrator.
 func RegisterBuiltinHandlers(registry *HandlerRegistry, workflowRepo repository.WorkflowRepository) error {
 	handlers := map[string]HandlerFunc{
-		"lock_workflow_goal": LockWorkflowGoalHandler(workflowRepo),
+		"lock_workflow_goal":       LockWorkflowGoalHandler(workflowRepo),
+		"append_targeted_context":  AppendTargetedContextHandler(),
 	}
 
 	for name, fn := range handlers {

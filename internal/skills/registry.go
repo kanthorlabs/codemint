@@ -76,9 +76,23 @@ func (r *Registry) All() map[string]domain.Skill {
 }
 
 // Get returns the skill with the given ID, if present.
+// It also supports the @codemint/<name> format used in workflow files
+// for embedded skills.
 func (r *Registry) Get(id string) (domain.Skill, bool) {
-	s, ok := r.skills[id]
-	return s, ok
+	// First, try direct ID lookup.
+	if s, ok := r.skills[id]; ok {
+		return s, ok
+	}
+
+	// Support @codemint/<name> format for embedded skills.
+	// This format is used in workflow files to reference built-in skills.
+	const prefix = "@codemint/"
+	if len(id) > len(prefix) && id[:len(prefix)] == prefix {
+		name := id[len(prefix):]
+		return r.GetByName(name)
+	}
+
+	return domain.Skill{}, false
 }
 
 // GetByName returns the skill with the given Name, if present.
