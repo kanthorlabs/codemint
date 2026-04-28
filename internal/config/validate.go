@@ -80,10 +80,9 @@ func Validate(c *Config) error {
 	}
 
 	// Custom validation: check assistant bindings reference known providers.
-	violations = append(violations, validateAssistantBinding(c.Assistants.System, "assistants.system", knownProviders)...)
-	violations = append(violations, validateAssistantBinding(c.Assistants.Brainstormer, "assistants.brainstormer", knownProviders)...)
-	violations = append(violations, validateAssistantBinding(c.Assistants.Clarifier, "assistants.clarifier", knownProviders)...)
-	violations = append(violations, validateAssistantBinding(c.Assistants.Archivist, "assistants.archivist", knownProviders)...)
+	for name, assistant := range c.Assistants {
+		violations = append(violations, validateAssistantBinding(assistant, fmt.Sprintf("assistants.%s", name), knownProviders)...)
+	}
 
 	if len(violations) > 0 {
 		return &ValidationError{Violations: violations}
@@ -92,9 +91,34 @@ func Validate(c *Config) error {
 	return nil
 }
 
+// ValidateSysDefault checks that the sys-default assistant is properly configured.
+// This is a strict validation that ensures sys-default has a valid provider.
+// Returns an error if sys-default is missing or has no provider configured.
+func ValidateSysDefault(c *Config, knownProviders map[string]bool) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+
+	sysDefault := c.GetSysDefault()
+	if sysDefault.Provider == "" {
+		return fmt.Errorf("assistants.%s.provider is required", SysDefaultAssistant)
+	}
+
+	if !knownProviders[sysDefault.Provider] {
+		var known []string
+		for name := range knownProviders {
+			known = append(known, name)
+		}
+		return fmt.Errorf("assistants.%s.provider: unknown provider %q (known: %s)",
+			SysDefaultAssistant, sysDefault.Provider, strings.Join(known, ", "))
+	}
+
+	return nil
+}
+
 // validateAssistantBinding checks that an assistant binding references a known provider.
-func validateAssistantBinding(binding AssistantBindingConfig, field string, knownProviders map[string]bool) []string {
-	// Empty provider is valid (defaults to opencode).
+func validateAssistantBinding(binding AssistantConfig, field string, knownProviders map[string]bool) []string {
+	// Empty provider is valid for non-sys-default assistants (defaults to opencode).
 	if binding.Provider == "" {
 		return nil
 	}

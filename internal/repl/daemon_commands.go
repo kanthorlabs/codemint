@@ -261,7 +261,7 @@ func statusHandler(deps *DaemonCommandDeps) registry.Handler {
 		// Session info.
 		sessionID := deps.ActiveSession.GetSessionID()
 		if sessionID == "" {
-			sb.WriteString("Session: (none - global mode)\n")
+			sb.WriteString("Session: (none)\n")
 		} else {
 			shortID := sessionID
 			if len(shortID) > 8 {

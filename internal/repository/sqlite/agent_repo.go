@@ -17,6 +17,7 @@ import (
 var systemAgents = []domain.Agent{
 	{Name: "human", Type: domain.AgentTypeHuman},
 	{Name: "sys-auto-approve", Type: domain.AgentTypeSystem},
+	{Name: "sys-default", Type: domain.AgentTypeAssistant},
 }
 
 // agentRepo is the SQLite implementation of repository.AgentRepository.

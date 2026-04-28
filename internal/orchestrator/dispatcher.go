@@ -212,9 +212,9 @@ func (d *Dispatcher) dispatchToSystemAssistant(ctx context.Context, active *Acti
 
 	// Build the assistant session from ActiveSession.
 	sess := agent.AssistantSession{
-		Session:     active.GetSession(),
-		Project:     active.GetProject(),
-		IsCodeMint:  active.IsCodeMintSession(),
+		Session:    active.GetSession(),
+		Project:    active.GetProject(),
+		IsCodeMint: active.IsCodeMintSession(),
 	}
 
 	session := active.GetSession()
@@ -259,7 +259,7 @@ func (d *Dispatcher) dispatchToSystemAssistant(ctx context.Context, active *Acti
 					Type:    registry.EventChatChunk,
 					Message: chunk.Text,
 					Payload: registry.ChatChunkPayload{
-						Source: "system-assistant",
+						Source: "sys-default",
 						Text:   chunk.Text,
 						Final:  false,
 					},
@@ -273,7 +273,7 @@ func (d *Dispatcher) dispatchToSystemAssistant(ctx context.Context, active *Acti
 				d.ui.NotifyAll(registry.UIEvent{
 					Type: registry.EventChatChunk,
 					Payload: registry.ChatChunkPayload{
-						Source: "system-assistant",
+						Source: "sys-default",
 						Final:  true,
 					},
 				})

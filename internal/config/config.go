@@ -3,11 +3,15 @@
 // Specification.
 package config
 
+// SysDefaultAssistant is the canonical name for the default system assistant.
+// This assistant must always be configured and seeded in the database.
+const SysDefaultAssistant = "sys-default"
+
 // Config is the root configuration structure for CodeMint.
 type Config struct {
-	Workflows  []WorkflowConfig `yaml:"workflows" validate:"dive"`
-	Providers  []ProviderConfig `yaml:"providers,omitempty" validate:"dive"`
-	Assistants AssistantsConfig `yaml:"assistants,omitempty"`
+	Workflows  []WorkflowConfig           `yaml:"workflows" validate:"dive"`
+	Providers  []ProviderConfig           `yaml:"providers,omitempty" validate:"dive"`
+	Assistants map[string]AssistantConfig `yaml:"assistants,omitempty"`
 }
 
 // WorkflowConfig defines a workflow entry in the configuration file.
@@ -37,20 +41,27 @@ type ProviderConfig struct {
 	ModelFlag string `yaml:"model_flag,omitempty"`
 }
 
-// AssistantsConfig holds configuration for different assistant bindings.
-type AssistantsConfig struct {
-	System       AssistantBindingConfig `yaml:"system,omitempty"`
-	Brainstormer AssistantBindingConfig `yaml:"brainstormer,omitempty"` // EPIC-02
-	Clarifier    AssistantBindingConfig `yaml:"clarifier,omitempty"`    // EPIC-02 §2.12
-	Archivist    AssistantBindingConfig `yaml:"archivist,omitempty"`    // EPIC-05
-}
-
-// AssistantBindingConfig configures which provider backs an assistant.
-type AssistantBindingConfig struct {
+// AssistantConfig configures which provider backs an assistant.
+type AssistantConfig struct {
 	// Provider is the name of the provider to use (e.g., "opencode", "codex", "claude-code").
 	// Must resolve via builtin catalog or an entry in Config.Providers.
-	// Defaults to "opencode" if not specified.
+	// Required for sys-default, defaults to "opencode" for others if not specified.
 	Provider string `yaml:"provider,omitempty"`
 	// Model optionally overrides the model to use for this assistant.
 	Model string `yaml:"model,omitempty"`
+}
+
+// GetAssistant returns the configuration for the named assistant.
+// Returns an empty AssistantConfig if the assistant is not configured.
+func (c *Config) GetAssistant(name string) AssistantConfig {
+	if c.Assistants == nil {
+		return AssistantConfig{}
+	}
+	return c.Assistants[name]
+}
+
+// GetSysDefault returns the sys-default assistant configuration.
+// This is the primary assistant used for workflow task execution.
+func (c *Config) GetSysDefault() AssistantConfig {
+	return c.GetAssistant(SysDefaultAssistant)
 }

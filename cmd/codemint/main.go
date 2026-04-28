@@ -185,12 +185,30 @@ func run() error {
 		return fmt.Errorf("create provider registry: %w", err)
 	}
 
-	// Step 9d: Resolve System Assistant provider.
+	// Build set of known provider names for validation.
+	knownProviders := make(map[string]bool)
+	for _, name := range agent.BuiltinProviderNames() {
+		knownProviders[name] = true
+	}
+	for _, p := range appCfg.Providers {
+		knownProviders[p.Name] = true
+	}
+
+	// Step 9d: Run pre-startup hook to validate sys-default configuration.
+	if err := orchestrator.PreStartupHook(ctx, orchestrator.PreStartupHookConfig{
+		Config:         appCfg,
+		AgentRepo:      agentRepo,
+		KnownProviders: knownProviders,
+	}); err != nil {
+		return fmt.Errorf("pre-startup hook: %w", err)
+	}
+
+	// Step 9e: Resolve sys-default provider.
 	// This handles CODEMINT_ACP_CMD env override for backward compatibility.
-	systemProviderName := appCfg.Assistants.System.Provider
-	systemProvider, providerErr := agent.ResolveSystemAssistantProvider(providerRegistry, systemProviderName)
+	sysDefaultCfg := appCfg.GetSysDefault()
+	systemProvider, providerErr := agent.ResolveSystemAssistantProvider(providerRegistry, sysDefaultCfg.Provider)
 	if providerErr != nil {
-		log.Printf("Warning: failed to resolve system assistant provider %q: %v", systemProviderName, providerErr)
+		log.Printf("Warning: failed to resolve sys-default provider %q: %v", sysDefaultCfg.Provider, providerErr)
 		systemProvider = nil
 	} else {
 		// Check if the binary exists
@@ -204,17 +222,17 @@ func run() error {
 		}
 	}
 
-	// Step 9e: Create ACP worker registry with provider-based config.
+	// Step 9f: Create ACP worker registry with provider-based config.
 	// The registry is created lazily - workers are only spawned when needed.
 	var acpRegistry *acp.Registry
 	if systemProvider != nil {
-		acpCfg := agent.WorkerConfigFromProvider(systemProvider, "")
+		acpCfg := agent.WorkerConfigFromProviderWithBinding(systemProvider, sysDefaultCfg, "")
 		acpRegistry = acp.NewRegistry(acpCfg)
 	} else {
 		// Fallback to default config if no provider resolved
 		acpRegistry = acp.NewRegistry(acp.DefaultConfig())
 	}
-	// Step 9f: Create ACP Runtime.
+	// Step 9g: Create ACP Runtime.
 	// The Runtime wires together Pipeline, Interceptor, StatusMapper, Fanout, and BufferRegistry.
 	bufferRegistry := acp.NewBufferRegistry(acp.DefaultBufferCapacity)
 
@@ -231,7 +249,7 @@ func run() error {
 		log.Fatalf("Failed to create ACP runtime: %v", err)
 	}
 
-	// Step 9g: Create System Assistant if enabled (Story 3.19).
+	// Step 9h: Create System Assistant if enabled (Story 3.19).
 	var systemAssistant agent.SystemAssistant
 	if cfg.withAssistant && systemProvider != nil {
 		sa, saErr := agent.NewACPAssistant(agent.ACPAssistantConfig{
@@ -386,22 +404,23 @@ func run() error {
 	// Register provider commands (Story 3.22).
 	providerCmdDeps := &repl.ProviderCommandDeps{
 		ProviderRegistry:    providerRegistry,
-		DefaultProviderName: systemProviderName,
+		DefaultProviderName: sysDefaultCfg.Provider,
 	}
 	if err := repl.RegisterProviderCommands(cmdRegistry, providerCmdDeps); err != nil {
 		return fmt.Errorf("register provider commands: %w", err)
 	}
 
 	// Register workflow commands (Story 2.0.4).
-	// Look up human agent ID for task assignment.
+	// Look up human and sys-default agent IDs for task assignment.
 	var humanAgentID, assistantAgentID string
 	humanAgent, _ := agentRepo.FindByName(ctx, "human")
 	if humanAgent != nil {
 		humanAgentID = humanAgent.ID
 	}
-	// Note: assistantAgentID would be set when we have a configured assistant agent.
-	// For now, tasks will use the default assignee from GenerateConfig.
-	// Skills resolver will be wired in Task 2.0.5.7.
+	sysDefaultAgent, _ := agentRepo.FindByName(ctx, "sys-default")
+	if sysDefaultAgent != nil {
+		assistantAgentID = sysDefaultAgent.ID
+	}
 
 	taskGenerator := workflow.NewTaskGenerator(humanAgentID, assistantAgentID, acpRuntime.YoloAgentID, nil)
 	workflowCmdDeps := &repl.WorkflowCommandDeps{
@@ -460,6 +479,11 @@ func run() error {
 
 	// The REPL loop handles shutdown via ErrShutdownGracefully.
 	err = repl.Loop(ctx, wrapper, os.Stdin, os.Stderr)
+
+	// Run pre-exit hook for cleanup.
+	if hookErr := orchestrator.PreExitHook(ctx, orchestrator.PreExitHookConfig{}); hookErr != nil {
+		log.Printf("Warning: pre-exit hook failed: %v", hookErr)
+	}
 
 	// Handle graceful shutdown.
 	if errors.Is(err, registry.ErrShutdownGracefully) {

@@ -15,7 +15,10 @@ func TestNullAssistant_Ask_StreamsChunks(t *testing.T) {
 	assistant := NewNullAssistant("Hello, I'm the test assistant!")
 
 	sess := AssistantSession{
-		Session:    nil,
+		Session: &domain.Session{
+			ID:     "test-session",
+			Status: domain.SessionStatusActive,
+		},
 		Project:    nil,
 		IsCodeMint: true,
 	}
@@ -76,7 +79,13 @@ func TestNullAssistant_Ask_WithContext_RespectsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	sess := AssistantSession{IsCodeMint: true}
+	sess := AssistantSession{
+		Session: &domain.Session{
+			ID:     "test-session",
+			Status: domain.SessionStatusActive,
+		},
+		IsCodeMint: true,
+	}
 	chunks, err := assistant.Ask(ctx, sess, "test")
 	if err != nil {
 		t.Fatalf("Ask returned unexpected error: %v", err)
@@ -98,13 +107,16 @@ func TestNullAssistant_Ask_WithContext_RespectsCancellation(t *testing.T) {
 }
 
 // TestAssistantSession_NoProject_StillWorks asserts that assistant session works
-// without a project (global mode).
+// without a project (CodeMint session).
 func TestAssistantSession_NoProject_StillWorks(t *testing.T) {
 	assistant := NewNullAssistant("Works without project")
 
 	sess := AssistantSession{
-		Session:    nil, // No session
-		Project:    nil, // No project
+		Session: &domain.Session{
+			ID:     "codemint-session",
+			Status: domain.SessionStatusActive,
+		},
+		Project:    nil, // No project (CodeMint session)
 		IsCodeMint: true,
 	}
 

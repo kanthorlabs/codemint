@@ -164,10 +164,8 @@ func TestValidationError_Error(t *testing.T) {
 
 func TestValidate_UnknownProvider(t *testing.T) {
 	cfg := &Config{
-		Assistants: AssistantsConfig{
-			System: AssistantBindingConfig{
-				Provider: "unknown-provider",
-			},
+		Assistants: map[string]AssistantConfig{
+			"sys-default": {Provider: "unknown-provider"},
 		},
 	}
 
@@ -193,19 +191,18 @@ func TestValidate_UnknownProvider(t *testing.T) {
 	}
 }
 
-func TestValidate_DefaultAssistantSystem(t *testing.T) {
-	// Empty assistants should be valid - defaults to opencode.
+func TestValidate_DefaultAssistantEmptyProvider(t *testing.T) {
+	// Empty assistants should be valid (general validation doesn't require sys-default).
+	// ValidateSysDefault is used for strict startup validation.
 	cfg := &Config{
-		Assistants: AssistantsConfig{
-			System: AssistantBindingConfig{
-				Provider: "", // Empty means default
-			},
+		Assistants: map[string]AssistantConfig{
+			"custom-assistant": {Provider: ""}, // Empty provider defaults to opencode
 		},
 	}
 
 	err := Validate(cfg)
 	if err != nil {
-		t.Errorf("Validate returned error for empty provider (should default): %v", err)
+		t.Errorf("Validate returned error for empty provider (should be valid): %v", err)
 	}
 }
 
@@ -215,10 +212,8 @@ func TestValidate_ProviderOverrideKnown(t *testing.T) {
 		Providers: []ProviderConfig{
 			{Name: "custom-ai", Command: "/usr/bin/custom-ai"},
 		},
-		Assistants: AssistantsConfig{
-			System: AssistantBindingConfig{
-				Provider: "custom-ai",
-			},
+		Assistants: map[string]AssistantConfig{
+			"sys-default": {Provider: "custom-ai"},
 		},
 	}
 
@@ -232,10 +227,8 @@ func TestValidate_BuiltinProvider(t *testing.T) {
 	// Using builtin providers should be valid.
 	for _, name := range []string{"opencode", "codex", "claude-code"} {
 		cfg := &Config{
-			Assistants: AssistantsConfig{
-				System: AssistantBindingConfig{
-					Provider: name,
-				},
+			Assistants: map[string]AssistantConfig{
+				"sys-default": {Provider: name},
 			},
 		}
 
@@ -301,10 +294,10 @@ func TestValidate_MultipleAssistantBindings(t *testing.T) {
 		Providers: []ProviderConfig{
 			{Name: "custom-brainstormer", Command: "/bin/brainstorm"},
 		},
-		Assistants: AssistantsConfig{
-			System:       AssistantBindingConfig{Provider: "opencode"},
-			Brainstormer: AssistantBindingConfig{Provider: "custom-brainstormer"},
-			Clarifier:    AssistantBindingConfig{Provider: "codex"},
+		Assistants: map[string]AssistantConfig{
+			"sys-default":  {Provider: "opencode"},
+			"brainstormer": {Provider: "custom-brainstormer"},
+			"clarifier":    {Provider: "codex"},
 		},
 	}
 
@@ -317,9 +310,9 @@ func TestValidate_MultipleAssistantBindings(t *testing.T) {
 func TestValidate_MultipleUnknownProviders(t *testing.T) {
 	// Test that multiple unknown providers are all reported.
 	cfg := &Config{
-		Assistants: AssistantsConfig{
-			System:       AssistantBindingConfig{Provider: "unknown1"},
-			Brainstormer: AssistantBindingConfig{Provider: "unknown2"},
+		Assistants: map[string]AssistantConfig{
+			"sys-default":  {Provider: "unknown1"},
+			"brainstormer": {Provider: "unknown2"},
 		},
 	}
 
@@ -335,5 +328,114 @@ func TestValidate_MultipleUnknownProviders(t *testing.T) {
 
 	if len(vErr.Violations) != 2 {
 		t.Errorf("expected 2 violations, got %d: %v", len(vErr.Violations), vErr.Violations)
+	}
+}
+
+func TestValidateSysDefault_MissingProvider(t *testing.T) {
+	cfg := &Config{
+		Assistants: map[string]AssistantConfig{
+			"sys-default": {Provider: ""}, // Missing provider
+		},
+	}
+
+	knownProviders := map[string]bool{"opencode": true}
+	err := ValidateSysDefault(cfg, knownProviders)
+	if err == nil {
+		t.Fatal("expected error for missing sys-default provider, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "provider is required") {
+		t.Errorf("error should mention provider is required: %v", err)
+	}
+}
+
+func TestValidateSysDefault_MissingSysDefault(t *testing.T) {
+	cfg := &Config{
+		Assistants: map[string]AssistantConfig{
+			// No sys-default configured
+			"other": {Provider: "opencode"},
+		},
+	}
+
+	knownProviders := map[string]bool{"opencode": true}
+	err := ValidateSysDefault(cfg, knownProviders)
+	if err == nil {
+		t.Fatal("expected error for missing sys-default, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "provider is required") {
+		t.Errorf("error should mention provider is required: %v", err)
+	}
+}
+
+func TestValidateSysDefault_UnknownProvider(t *testing.T) {
+	cfg := &Config{
+		Assistants: map[string]AssistantConfig{
+			"sys-default": {Provider: "unknown-provider"},
+		},
+	}
+
+	knownProviders := map[string]bool{"opencode": true}
+	err := ValidateSysDefault(cfg, knownProviders)
+	if err == nil {
+		t.Fatal("expected error for unknown sys-default provider, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "unknown provider") {
+		t.Errorf("error should mention unknown provider: %v", err)
+	}
+}
+
+func TestValidateSysDefault_Valid(t *testing.T) {
+	cfg := &Config{
+		Assistants: map[string]AssistantConfig{
+			"sys-default": {Provider: "opencode", Model: "gpt-4"},
+		},
+	}
+
+	knownProviders := map[string]bool{"opencode": true}
+	err := ValidateSysDefault(cfg, knownProviders)
+	if err != nil {
+		t.Errorf("ValidateSysDefault returned error for valid config: %v", err)
+	}
+}
+
+func TestGetAssistant(t *testing.T) {
+	cfg := &Config{
+		Assistants: map[string]AssistantConfig{
+			"sys-default": {Provider: "opencode", Model: "gpt-4"},
+			"custom":      {Provider: "codex"},
+		},
+	}
+
+	// Test getting existing assistant.
+	sysDefault := cfg.GetAssistant("sys-default")
+	if sysDefault.Provider != "opencode" {
+		t.Errorf("GetAssistant(sys-default).Provider = %q; want %q", sysDefault.Provider, "opencode")
+	}
+	if sysDefault.Model != "gpt-4" {
+		t.Errorf("GetAssistant(sys-default).Model = %q; want %q", sysDefault.Model, "gpt-4")
+	}
+
+	// Test getting non-existent assistant.
+	missing := cfg.GetAssistant("missing")
+	if missing.Provider != "" || missing.Model != "" {
+		t.Errorf("GetAssistant(missing) should return empty config, got %+v", missing)
+	}
+}
+
+func TestGetSysDefault(t *testing.T) {
+	cfg := &Config{
+		Assistants: map[string]AssistantConfig{
+			"sys-default": {Provider: "opencode", Model: "gpt-4"},
+		},
+	}
+
+	sysDefault := cfg.GetSysDefault()
+	if sysDefault.Provider != "opencode" {
+		t.Errorf("GetSysDefault().Provider = %q; want %q", sysDefault.Provider, "opencode")
+	}
+	if sysDefault.Model != "gpt-4" {
+		t.Errorf("GetSysDefault().Model = %q; want %q", sysDefault.Model, "gpt-4")
 	}
 }

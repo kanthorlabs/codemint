@@ -11,7 +11,7 @@ import (
 )
 
 // ProjectSwitchCallback is called when the active project changes.
-// The callback receives the new project (may be nil if switching to global mode).
+// The callback receives the new project (may be nil if no project is active).
 type ProjectSwitchCallback func(*domain.Project)
 
 // ActiveSession holds the runtime state for the current user session. It is
@@ -225,7 +225,7 @@ func (a *ActiveSession) ACPRuntime() *Runtime {
 }
 
 // OnProjectSwitch registers a callback that is invoked when the active project changes.
-// The callback receives the new project (may be nil if switching to global mode).
+// The callback receives the new project (may be nil if no project is active).
 // This is used by the Runtime to reload permissions when the project changes (Task 3.12.3).
 func (a *ActiveSession) OnProjectSwitch(fn ProjectSwitchCallback) {
 	a.projectSwitchMu.Lock()

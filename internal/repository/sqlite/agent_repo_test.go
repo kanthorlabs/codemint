@@ -42,13 +42,14 @@ func TestEnsureSystemAgents_Seeds(t *testing.T) {
 		t.Fatalf("EnsureSystemAgents returned error: %v", err)
 	}
 
-	// Assert both agents exist with correct types.
+	// Assert all system agents exist with correct types.
 	cases := []struct {
 		name     string
 		wantType int
 	}{
 		{"human", 0},
 		{"sys-auto-approve", 2},
+		{"sys-default", 1},
 	}
 
 	for _, tc := range cases {
@@ -83,8 +84,8 @@ func TestEnsureSystemAgents_Idempotent(t *testing.T) {
 	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent`).Scan(&count); err != nil {
 		t.Fatalf("count agents: %v", err)
 	}
-	if count != 2 {
-		t.Errorf("expected 2 agents after idempotent seeding, got %d", count)
+	if count != 3 {
+		t.Errorf("expected 3 agents after idempotent seeding, got %d", count)
 	}
 }
 

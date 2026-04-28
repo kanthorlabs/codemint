@@ -3,7 +3,6 @@
 package agent
 
 import (
-	"log/slog"
 	"os"
 
 	"codemint.kanthorlabs.com/internal/acp"
@@ -14,29 +13,19 @@ import (
 // The cwd parameter specifies the working directory for the process.
 // Deprecated: Use WorkerConfigFromProviderWithBinding for model support.
 func WorkerConfigFromProvider(p *Provider, cwd string) acp.WorkerConfig {
-	return WorkerConfigFromProviderWithBinding(p, config.AssistantBindingConfig{}, cwd)
+	return WorkerConfigFromProviderWithBinding(p, config.AssistantConfig{}, cwd)
 }
 
 // WorkerConfigFromProviderWithBinding creates an acp.WorkerConfig from a Provider
-// and an AssistantBindingConfig. The binding's Model field is injected into spawn args
-// if the Provider supports a model flag.
-func WorkerConfigFromProviderWithBinding(p *Provider, binding config.AssistantBindingConfig, cwd string) acp.WorkerConfig {
+// and an AssistantConfig. The binding's Model field is passed to WorkerConfig.Model
+// for configuration via ACP session/set_config_option after session creation.
+func WorkerConfigFromProviderWithBinding(p *Provider, binding config.AssistantConfig, cwd string) acp.WorkerConfig {
 	if p == nil {
 		return acp.DefaultConfig()
 	}
 
-	// Copy base args
+	// Copy base args (model is no longer injected here - it's set via ACP protocol)
 	args := append([]string{}, p.Args...)
-
-	// Inject model flag if binding has a model specified
-	if binding.Model != "" {
-		if p.ModelFlag != "" {
-			args = append(args, p.ModelFlag, binding.Model)
-		} else {
-			slog.Debug("provider does not support CLI model selector; ignoring",
-				"provider", p.Name, "model", binding.Model)
-		}
-	}
 
 	// Merge provider env with current environment
 	var env []string
@@ -52,6 +41,7 @@ func WorkerConfigFromProviderWithBinding(p *Provider, binding config.AssistantBi
 		Cwd:              cwd,
 		Env:              env,
 		HandshakeTimeout: acp.DefaultHandshakeTimeout,
+		Model:            binding.Model, // Set via ACP session/set_config_option
 	}
 }
 

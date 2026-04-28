@@ -365,7 +365,10 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 	// Lazy spawn the ACP worker (Task 3.13.2).
 	if _, err := s.ensureWorkerAttached(ctx); err != nil {
-		s.logger.Error("scheduler: failed to attach worker", "error", err)
+		s.logger.Error("scheduler: failed to attach worker",
+			"error", err,
+			"hint", "Check that the configured provider binary is working. Try running it manually: opencode acp",
+		)
 		// Continue without worker - tasks will fail but loop keeps running.
 	}
 

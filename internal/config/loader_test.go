@@ -130,7 +130,7 @@ func TestLoad_NoLegacyAgentsKey_NoWarning(t *testing.T) {
 	content := `
 workflows: []
 assistants:
-  system:
+  sys-default:
     provider: opencode
 `
 	tmpFile := writeTestFile(t, content)
@@ -196,43 +196,15 @@ func (h *testLogHandler) hasWarning(keywords ...string) bool {
 	return false
 }
 
-func TestLoad_UnknownAssistantRole_Fails(t *testing.T) {
+func TestLoad_AssistantsMap(t *testing.T) {
 	content := `
 workflows: []
 assistants:
-  systen:  # typo - should be "system"
+  sys-default:
     provider: opencode
-`
-	tmpFile := writeTestFile(t, content)
-
-	_, err := Load(tmpFile)
-	if err == nil {
-		t.Fatal("expected error for unknown assistant role, got nil")
-	}
-
-	if !strings.Contains(err.Error(), "unknown assistant role") {
-		t.Errorf("error should mention 'unknown assistant role': %v", err)
-	}
-	if !strings.Contains(err.Error(), "systen") {
-		t.Errorf("error should mention the typo 'systen': %v", err)
-	}
-	if !strings.Contains(err.Error(), "known:") {
-		t.Errorf("error should list known roles: %v", err)
-	}
-}
-
-func TestLoad_KnownAssistantRoles_Pass(t *testing.T) {
-	content := `
-workflows: []
-assistants:
-  system:
-    provider: opencode
+    model: gpt-4
   brainstormer:
     provider: codex
-  clarifier:
-    provider: opencode
-  archivist:
-    provider: opencode
 `
 	tmpFile := writeTestFile(t, content)
 
@@ -241,11 +213,17 @@ assistants:
 		t.Fatalf("Load returned error for valid config: %v", err)
 	}
 
-	if cfg.Assistants.System.Provider != "opencode" {
-		t.Errorf("System.Provider = %q; want %q", cfg.Assistants.System.Provider, "opencode")
+	sysDefault := cfg.GetAssistant("sys-default")
+	if sysDefault.Provider != "opencode" {
+		t.Errorf("sys-default.Provider = %q; want %q", sysDefault.Provider, "opencode")
 	}
-	if cfg.Assistants.Brainstormer.Provider != "codex" {
-		t.Errorf("Brainstormer.Provider = %q; want %q", cfg.Assistants.Brainstormer.Provider, "codex")
+	if sysDefault.Model != "gpt-4" {
+		t.Errorf("sys-default.Model = %q; want %q", sysDefault.Model, "gpt-4")
+	}
+
+	brainstormer := cfg.GetAssistant("brainstormer")
+	if brainstormer.Provider != "codex" {
+		t.Errorf("brainstormer.Provider = %q; want %q", brainstormer.Provider, "codex")
 	}
 }
 

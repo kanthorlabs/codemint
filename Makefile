@@ -44,7 +44,7 @@ test-coverage:
 .PHONY: clean
 clean:
 	rm -f build/$(BINARY) build/coverage.out build/coverage.html
-	rm -rf ~/.config/codemint ~/.config/codemint
+	rm -rf ~/.config/codemint ~/.local/share/codemint
 
 # Install the binary to $GOPATH/bin
 .PHONY: install

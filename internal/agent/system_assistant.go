@@ -36,7 +36,7 @@ type ChatChunk struct {
 // AssistantSession provides the minimal session info needed by the assistant.
 // This avoids an import cycle with orchestrator.ActiveSession.
 type AssistantSession struct {
-	// Session is the domain session (may be nil for legacy global mode).
+	// Session is the domain session (required, always non-nil after bootstrap).
 	Session *domain.Session
 	// Project is the domain project (may be nil for non-project queries).
 	Project *domain.Project
@@ -117,7 +117,7 @@ func NewACPAssistant(cfg ACPAssistantConfig) (SystemAssistant, error) {
 	return &acpAssistant{
 		attacher: cfg.Attacher,
 		provider: cfg.Provider,
-		agentID:  "system-assistant",
+		agentID:  "sys-default",
 		logger:   logger,
 		workers:  make(map[string]*acp.Worker),
 	}, nil
@@ -125,25 +125,20 @@ func NewACPAssistant(cfg ACPAssistantConfig) (SystemAssistant, error) {
 
 // Ask implements SystemAssistant.Ask.
 // It spawns or retrieves an ACP worker for the session and sends the prompt.
+// Session must be non-nil (guaranteed after bootstrap).
 func (a *acpAssistant) Ask(ctx context.Context, sess AssistantSession, text string) (<-chan ChatChunk, error) {
 	// Create a result channel for streaming chunks.
 	ch := make(chan ChatChunk, 16)
 
-	// For global sessions without a project, we work from user's home directory.
-	var session *domain.Session
-	if sess.Session != nil {
-		session = sess.Session
-	} else {
-		// Create a temporary session for global mode.
-		session = &domain.Session{
-			ID:     "global-assistant",
-			Status: domain.SessionStatusActive,
-		}
+	// Session is required (guaranteed non-nil after bootstrap).
+	if sess.Session == nil {
+		close(ch)
+		return ch, errors.New("agent: session is required")
 	}
 
-	// Attach worker (project can be nil for global mode).
+	// Attach worker (project can be nil for CodeMint sessions).
 	// Use AttachWorkerRaw to avoid starting the pipeline - we consume events directly.
-	worker, err := a.attacher.AttachWorkerRaw(ctx, session, sess.Project)
+	worker, err := a.attacher.AttachWorkerRaw(ctx, sess.Session, sess.Project)
 	if err != nil {
 		close(ch)
 		return ch, fmt.Errorf("agent: attach worker: %w", err)
@@ -151,7 +146,7 @@ func (a *acpAssistant) Ask(ctx context.Context, sess AssistantSession, text stri
 
 	// Track the worker for cleanup.
 	a.mu.Lock()
-	a.workers[session.ID] = worker
+	a.workers[sess.Session.ID] = worker
 	a.mu.Unlock()
 
 	// Build the prompt request.

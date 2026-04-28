@@ -87,7 +87,7 @@ type ActiveSessionInfo interface {
 // Used by commands that need to switch sessions or update session ownership.
 type MutableSessionInfo interface {
 	ActiveSessionInfo
-	// GetSessionID returns the current session ID, or empty if global mode.
+	// GetSessionID returns the current session ID, or empty if no session active.
 	GetSessionID() string
 	// GetProjectID returns the current project ID, or empty if no project.
 	GetProjectID() string
@@ -234,7 +234,7 @@ type YoloAutoApprovedPayload struct {
 // ChatChunkPayload contains details about a streaming chat chunk.
 // This payload is used with EventChatChunk events.
 type ChatChunkPayload struct {
-	// Source identifies the origin of the message (e.g., "system-assistant", "agent-coding", "user").
+	// Source identifies the origin of the message (e.g., "sys-default", "agent-coding", "user").
 	Source string `json:"source"`
 	// Text is the content of this chunk.
 	Text string `json:"text"`

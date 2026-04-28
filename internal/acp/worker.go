@@ -54,6 +54,7 @@ type WorkerConfig struct {
 	Env              []string      // Additional environment variables (appended to os.Environ())
 	HandshakeTimeout time.Duration // Timeout for initialize handshake (default: 10s)
 	SystemPrompt     string        // System prompt with memory injection for the session
+	Model            string        // Model to use for the session (set via session/set_config_option)
 }
 
 // DefaultConfig returns a WorkerConfig with default values.
@@ -89,6 +90,10 @@ type Worker struct {
 	// Capabilities from initialize handshake
 	capabilities InitializeResult
 
+	// stderrBuffer captures stderr output for error reporting.
+	stderrBuffer   []string
+	stderrBufferMu sync.Mutex
+
 	// acpSessionID is the current ACP session ID.
 	// Updated after session/new calls.
 	acpSessionID   string
@@ -107,7 +112,7 @@ func Spawn(ctx context.Context, cfg WorkerConfig) (*Worker, error) {
 	if cfg.Command == "" {
 		cfg.Command = DefaultCommand
 	}
-	if len(cfg.Args) == 0 {
+	if cfg.Command == DefaultCommand && len(cfg.Args) == 0 {
 		cfg.Args = []string{"acp"}
 	}
 	if cfg.HandshakeTimeout == 0 {
@@ -155,14 +160,15 @@ func Spawn(ctx context.Context, cfg WorkerConfig) (*Worker, error) {
 	}
 
 	w := &Worker{
-		cfg:     cfg,
-		cmd:     cmd,
-		stdin:   stdin,
-		stdout:  stdout,
-		stderr:  stderr,
-		out:     make(chan Message, DefaultOutChannelSize),
-		done:    make(chan struct{}),
-		pending: make(map[int64]chan Message),
+		cfg:          cfg,
+		cmd:          cmd,
+		stdin:        stdin,
+		stdout:       stdout,
+		stderr:       stderr,
+		out:          make(chan Message, DefaultOutChannelSize),
+		done:         make(chan struct{}),
+		pending:      make(map[int64]chan Message),
+		stderrBuffer: make([]string, 0, 50), // Pre-allocate for typical error output
 	}
 
 	// Start reader goroutines
@@ -172,17 +178,43 @@ func Spawn(ctx context.Context, cfg WorkerConfig) (*Worker, error) {
 
 	// Perform initialize handshake
 	if err := w.initialize(ctx); err != nil {
+		// Capture stderr for error context
+		stderrOutput := w.getStderrOutput()
 		w.Stop()
+		if stderrOutput != "" {
+			return nil, fmt.Errorf("%w\nstderr: %s", err, stderrOutput)
+		}
 		return nil, err
 	}
 
 	// Create initial session with system prompt (memory injection)
 	sessionID, err := w.createSession(ctx, cfg.SystemPrompt)
 	if err != nil {
+		stderrOutput := w.getStderrOutput()
 		w.Stop()
+		if stderrOutput != "" {
+			return nil, fmt.Errorf("acp: create initial session: %w\nstderr: %s", err, stderrOutput)
+		}
 		return nil, fmt.Errorf("acp: create initial session: %w", err)
 	}
 	w.setACPSessionID(sessionID)
+
+	// Set model via session/set_config_option if configured
+	// Per ACP spec: https://agentclientprotocol.com/protocol/session-config-options.md
+	if cfg.Model != "" {
+		if err := w.setConfigOption(ctx, sessionID, "model", cfg.Model); err != nil {
+			// Log warning but don't fail - model selection is best-effort
+			slog.Warn("acp: failed to set model via config option",
+				"model", cfg.Model,
+				"error", err,
+			)
+		} else {
+			slog.Debug("acp: model set via config option",
+				"model", cfg.Model,
+				"session_id", sessionID,
+			)
+		}
+	}
 
 	return w, nil
 }
@@ -503,6 +535,32 @@ func (w *Worker) createSession(ctx context.Context, systemPrompt string) (string
 	return result.SessionID, nil
 }
 
+// setConfigOption sets a configuration option for the session.
+// Per ACP spec: https://agentclientprotocol.com/protocol/session-config-options.md
+func (w *Worker) setConfigOption(ctx context.Context, sessionID, configID, value string) error {
+	params := SetConfigOptionParams{
+		SessionID: sessionID,
+		ConfigID:  configID,
+		Value:     value,
+	}
+
+	req, err := NewRequest(MethodSetConfigOption, params)
+	if err != nil {
+		return fmt.Errorf("create set_config_option request: %w", err)
+	}
+
+	resp, err := w.SendRequest(ctx, req)
+	if err != nil {
+		return fmt.Errorf("send set_config_option request: %w", err)
+	}
+
+	if resp.Error != nil {
+		return fmt.Errorf("set_config_option failed: %w", resp.Error)
+	}
+
+	return nil
+}
+
 // ACPSessionID returns the current ACP session ID.
 func (w *Worker) ACPSessionID() string {
 	w.acpSessionIDMu.RLock()
@@ -642,12 +700,47 @@ func (w *Worker) readStdout() {
 	}
 }
 
-// readStderr reads and logs the worker's stderr.
+// readStderr reads and captures the worker's stderr output.
+// Output is stored in stderrBuffer for error reporting and logged at DEBUG level.
 func (w *Worker) readStderr() {
 	scanner := bufio.NewScanner(w.stderr)
 	for scanner.Scan() {
-		slog.Debug("acp.stderr", "line", scanner.Text())
+		line := scanner.Text()
+		slog.Debug("acp.stderr", "line", line)
+
+		// Capture stderr for error reporting (keep last 50 lines)
+		w.stderrBufferMu.Lock()
+		w.stderrBuffer = append(w.stderrBuffer, line)
+		if len(w.stderrBuffer) > 50 {
+			w.stderrBuffer = w.stderrBuffer[len(w.stderrBuffer)-50:]
+		}
+		w.stderrBufferMu.Unlock()
 	}
+}
+
+// getStderrOutput returns captured stderr output as a single string.
+// Used for error reporting when the worker fails.
+func (w *Worker) getStderrOutput() string {
+	w.stderrBufferMu.Lock()
+	defer w.stderrBufferMu.Unlock()
+
+	if len(w.stderrBuffer) == 0 {
+		return ""
+	}
+
+	// Join lines with newlines, limit to reasonable size
+	result := ""
+	for _, line := range w.stderrBuffer {
+		if len(result)+len(line) > 2000 {
+			result += "\n... (truncated)"
+			break
+		}
+		if result != "" {
+			result += "\n"
+		}
+		result += line
+	}
+	return result
 }
 
 // waitProcess waits for the worker process to exit.
@@ -657,6 +750,21 @@ func (w *Worker) waitProcess() {
 	w.exitOnce.Do(func() {
 		w.exitErr = err
 		close(w.done)
+
+		// Log stderr on unexpected exit (non-zero exit code)
+		if err != nil {
+			stderrOutput := w.getStderrOutput()
+			if stderrOutput != "" {
+				slog.Warn("acp: worker process exited with error",
+					"error", err,
+					"stderr", stderrOutput,
+				)
+			} else {
+				slog.Warn("acp: worker process exited with error",
+					"error", err,
+				)
+			}
+		}
 	})
 }
 

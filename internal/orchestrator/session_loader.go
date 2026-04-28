@@ -55,7 +55,7 @@ func (l *SessionLoader) LoadMostRecentSession(ctx context.Context, clientMode re
 		return nil, fmt.Errorf("get most recent active session: %w", err)
 	}
 
-	// No active sessions - start in global mode.
+	// No active sessions found.
 	if session == nil {
 		return &LoadResult{
 			Session: nil,

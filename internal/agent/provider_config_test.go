@@ -151,45 +151,47 @@ func TestResolveSystemAssistantProvider_UnknownProvider(t *testing.T) {
 	}
 }
 
-func TestWorkerConfig_AppendsModelArg(t *testing.T) {
+func TestWorkerConfig_SetsModelField(t *testing.T) {
 	provider := &Provider{
-		Name:      "test",
-		Command:   "test-cmd",
-		Args:      []string{"acp"},
-		ModelFlag: "--model",
+		Name:    "test",
+		Command: "test-cmd",
+		Args:    []string{"acp"},
 	}
-	binding := config.AssistantBindingConfig{
+	binding := config.AssistantConfig{
 		Provider: "test",
 		Model:    "gpt-5",
 	}
 
 	cfg := WorkerConfigFromProviderWithBinding(provider, binding, "/dir")
 
-	// Args should have model flag appended
-	expectedArgs := []string{"acp", "--model", "gpt-5"}
-	if len(cfg.Args) != len(expectedArgs) {
-		t.Fatalf("Args = %v; want %v", cfg.Args, expectedArgs)
+	// Model should be set on WorkerConfig.Model (not as CLI args)
+	if cfg.Model != "gpt-5" {
+		t.Errorf("Model = %q; want %q", cfg.Model, "gpt-5")
 	}
-	for i, arg := range expectedArgs {
-		if cfg.Args[i] != arg {
-			t.Errorf("Args[%d] = %q; want %q", i, cfg.Args[i], arg)
-		}
+
+	// Args should NOT contain model flag (model is set via ACP protocol)
+	if len(cfg.Args) != 1 || cfg.Args[0] != "acp" {
+		t.Errorf("Args = %v; want [acp] (model should not be in args)", cfg.Args)
 	}
 }
 
-func TestWorkerConfig_NoModel_NoFlag(t *testing.T) {
+func TestWorkerConfig_NoModel_EmptyModelField(t *testing.T) {
 	provider := &Provider{
-		Name:      "test",
-		Command:   "test-cmd",
-		Args:      []string{"acp"},
-		ModelFlag: "--model",
+		Name:    "test",
+		Command: "test-cmd",
+		Args:    []string{"acp"},
 	}
-	binding := config.AssistantBindingConfig{
+	binding := config.AssistantConfig{
 		Provider: "test",
 		// Model intentionally empty
 	}
 
 	cfg := WorkerConfigFromProviderWithBinding(provider, binding, "/dir")
+
+	// Model field should be empty
+	if cfg.Model != "" {
+		t.Errorf("Model = %q; want empty", cfg.Model)
+	}
 
 	// Args should be unchanged
 	if len(cfg.Args) != 1 || cfg.Args[0] != "acp" {
@@ -197,34 +199,13 @@ func TestWorkerConfig_NoModel_NoFlag(t *testing.T) {
 	}
 }
 
-func TestWorkerConfig_ModelWithEmptyModelFlag_Ignored(t *testing.T) {
-	provider := &Provider{
-		Name:      "test",
-		Command:   "test-cmd",
-		Args:      []string{"acp"},
-		ModelFlag: "", // Provider doesn't support model flag
-	}
-	binding := config.AssistantBindingConfig{
-		Provider: "test",
-		Model:    "gpt-5",
-	}
-
-	cfg := WorkerConfigFromProviderWithBinding(provider, binding, "/dir")
-
-	// Args should be unchanged (model ignored)
-	if len(cfg.Args) != 1 || cfg.Args[0] != "acp" {
-		t.Errorf("Args = %v; want [acp] (model should be ignored)", cfg.Args)
-	}
-}
-
 func TestWorkerConfig_ArgsIndependentWithBinding(t *testing.T) {
 	provider := &Provider{
-		Name:      "test",
-		Command:   "test-cmd",
-		Args:      []string{"original"},
-		ModelFlag: "--model",
+		Name:    "test",
+		Command: "test-cmd",
+		Args:    []string{"original"},
 	}
-	binding := config.AssistantBindingConfig{
+	binding := config.AssistantConfig{
 		Model: "test-model",
 	}
 
@@ -236,13 +217,13 @@ func TestWorkerConfig_ArgsIndependentWithBinding(t *testing.T) {
 	}
 }
 
-// TestAssistant_E2E_ModelInSpawnArgs is an integration test that proves the full
-// path from config.yaml to spawn args includes the model flag.
-func TestAssistant_E2E_ModelInSpawnArgs(t *testing.T) {
-	// Simulate config with assistants.system.model specified.
+// TestAssistant_E2E_ModelInWorkerConfig is an integration test that proves the full
+// path from config.yaml to WorkerConfig.Model includes the model value.
+func TestAssistant_E2E_ModelInWorkerConfig(t *testing.T) {
+	// Simulate config with assistants.sys-default.model specified.
 	cfg := &config.Config{
-		Assistants: config.AssistantsConfig{
-			System: config.AssistantBindingConfig{
+		Assistants: map[string]config.AssistantConfig{
+			"sys-default": {
 				Provider: "opencode",
 				Model:    "github-copilot/claude-sonnet-4.6",
 			},
@@ -260,31 +241,32 @@ func TestAssistant_E2E_ModelInSpawnArgs(t *testing.T) {
 	defer os.Setenv(acp.EnvACPCommand, oldVal)
 	os.Unsetenv(acp.EnvACPCommand) // Ensure env override doesn't interfere
 
-	provider, err := ResolveSystemAssistantProvider(registry, cfg.Assistants.System.Provider)
+	sysDefault := cfg.GetSysDefault()
+	provider, err := ResolveSystemAssistantProvider(registry, sysDefault.Provider)
 	if err != nil {
 		t.Fatalf("ResolveSystemAssistantProvider failed: %v", err)
 	}
 
 	// Create worker config with binding.
-	workerCfg := WorkerConfigFromProviderWithBinding(provider, cfg.Assistants.System, "/workspace")
+	workerCfg := WorkerConfigFromProviderWithBinding(provider, sysDefault, "/workspace")
 
-	// Verify the args contain the model flag and value.
-	expectedArgs := []string{"acp", "--model", "github-copilot/claude-sonnet-4.6"}
-	if len(workerCfg.Args) != len(expectedArgs) {
-		t.Fatalf("Args = %v; want %v", workerCfg.Args, expectedArgs)
+	// Verify Model is set on WorkerConfig (not in args).
+	if workerCfg.Model != "github-copilot/claude-sonnet-4.6" {
+		t.Errorf("Model = %q; want %q", workerCfg.Model, "github-copilot/claude-sonnet-4.6")
 	}
-	for i, arg := range expectedArgs {
-		if workerCfg.Args[i] != arg {
-			t.Errorf("Args[%d] = %q; want %q", i, workerCfg.Args[i], arg)
-		}
+
+	// Args should NOT contain model flag.
+	expectedArgs := []string{"acp"}
+	if len(workerCfg.Args) != len(expectedArgs) {
+		t.Fatalf("Args = %v; want %v (model should not be in args)", workerCfg.Args, expectedArgs)
 	}
 }
 
-// TestAssistant_E2E_NoModel_NoModelArg verifies that omitting model doesn't add flag.
-func TestAssistant_E2E_NoModel_NoModelArg(t *testing.T) {
+// TestAssistant_E2E_NoModel_EmptyModelField verifies that omitting model leaves Model field empty.
+func TestAssistant_E2E_NoModel_EmptyModelField(t *testing.T) {
 	cfg := &config.Config{
-		Assistants: config.AssistantsConfig{
-			System: config.AssistantBindingConfig{
+		Assistants: map[string]config.AssistantConfig{
+			"sys-default": {
 				Provider: "opencode",
 				// Model intentionally empty - use provider default
 			},
@@ -300,16 +282,22 @@ func TestAssistant_E2E_NoModel_NoModelArg(t *testing.T) {
 	defer os.Setenv(acp.EnvACPCommand, oldVal)
 	os.Unsetenv(acp.EnvACPCommand)
 
-	provider, err := ResolveSystemAssistantProvider(registry, cfg.Assistants.System.Provider)
+	sysDefault := cfg.GetSysDefault()
+	provider, err := ResolveSystemAssistantProvider(registry, sysDefault.Provider)
 	if err != nil {
 		t.Fatalf("ResolveSystemAssistantProvider failed: %v", err)
 	}
 
-	workerCfg := WorkerConfigFromProviderWithBinding(provider, cfg.Assistants.System, "/workspace")
+	workerCfg := WorkerConfigFromProviderWithBinding(provider, sysDefault, "/workspace")
 
-	// Args should be just ["acp"], no model flag.
+	// Model should be empty.
+	if workerCfg.Model != "" {
+		t.Errorf("Model = %q; want empty", workerCfg.Model)
+	}
+
+	// Args should be just ["acp"].
 	if len(workerCfg.Args) != 1 || workerCfg.Args[0] != "acp" {
-		t.Errorf("Args = %v; want [acp] (no model flag)", workerCfg.Args)
+		t.Errorf("Args = %v; want [acp]", workerCfg.Args)
 	}
 }
 
@@ -321,11 +309,10 @@ func TestAssistant_E2E_CustomProviderWithModel(t *testing.T) {
 				Name:    "custom-ai",
 				Command: "/usr/bin/custom-ai",
 				Args:    []string{"serve"},
-				// ModelFlag not set - should default to "--model"
 			},
 		},
-		Assistants: config.AssistantsConfig{
-			System: config.AssistantBindingConfig{
+		Assistants: map[string]config.AssistantConfig{
+			"sys-default": {
 				Provider: "custom-ai",
 				Model:    "custom-model-v1",
 			},
@@ -341,20 +328,22 @@ func TestAssistant_E2E_CustomProviderWithModel(t *testing.T) {
 	defer os.Setenv(acp.EnvACPCommand, oldVal)
 	os.Unsetenv(acp.EnvACPCommand)
 
-	provider, err := ResolveSystemAssistantProvider(registry, cfg.Assistants.System.Provider)
+	sysDefault := cfg.GetSysDefault()
+	provider, err := ResolveSystemAssistantProvider(registry, sysDefault.Provider)
 	if err != nil {
 		t.Fatalf("ResolveSystemAssistantProvider failed: %v", err)
 	}
 
-	workerCfg := WorkerConfigFromProviderWithBinding(provider, cfg.Assistants.System, "/workspace")
+	workerCfg := WorkerConfigFromProviderWithBinding(provider, sysDefault, "/workspace")
 
-	expectedArgs := []string{"serve", "--model", "custom-model-v1"}
-	if len(workerCfg.Args) != len(expectedArgs) {
-		t.Fatalf("Args = %v; want %v", workerCfg.Args, expectedArgs)
+	// Model should be set on WorkerConfig.
+	if workerCfg.Model != "custom-model-v1" {
+		t.Errorf("Model = %q; want %q", workerCfg.Model, "custom-model-v1")
 	}
-	for i, arg := range expectedArgs {
-		if workerCfg.Args[i] != arg {
-			t.Errorf("Args[%d] = %q; want %q", i, workerCfg.Args[i], arg)
-		}
+
+	// Args should NOT contain model flag (only base args).
+	expectedArgs := []string{"serve"}
+	if len(workerCfg.Args) != len(expectedArgs) {
+		t.Fatalf("Args = %v; want %v (model should not be in args)", workerCfg.Args, expectedArgs)
 	}
 }

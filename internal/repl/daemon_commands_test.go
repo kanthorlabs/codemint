@@ -213,8 +213,8 @@ func TestStatusHandler_NoSession(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !contains(result.Message, "Session: (none - global mode)") {
-		t.Errorf("missing global mode indicator in output: %s", result.Message)
+	if !contains(result.Message, "Session: (none)") {
+		t.Errorf("missing no-session indicator in output: %s", result.Message)
 	}
 }
 

@@ -13,13 +13,14 @@ const JSONRPCVersion = "2.0"
 
 // Method constants for ACP communication.
 const (
-	MethodInitialize        = "initialize"
-	MethodShutdown          = "shutdown"
-	MethodSessionNew        = "session/new"
-	MethodSessionPrompt     = "session/prompt"
-	MethodSessionCancel     = "session/cancel"
-	MethodSessionUpdate     = "session/update"
-	MethodRequestPermission = "session/request_permission"
+	MethodInitialize          = "initialize"
+	MethodShutdown            = "shutdown"
+	MethodSessionNew          = "session/new"
+	MethodSessionPrompt       = "session/prompt"
+	MethodSessionCancel       = "session/cancel"
+	MethodSessionUpdate       = "session/update"
+	MethodRequestPermission   = "session/request_permission"
+	MethodSetConfigOption     = "session/set_config_option"
 )
 
 // UpdateKind constants for session update notifications.
@@ -419,6 +420,20 @@ type SessionMode struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+}
+
+// SetConfigOptionParams represents the parameters for session/set_config_option.
+// Per ACP spec: https://agentclientprotocol.com/protocol/session-config-options.md
+type SetConfigOptionParams struct {
+	SessionID string `json:"sessionId"`
+	ConfigID  string `json:"configId"`
+	Value     string `json:"value"`
+}
+
+// SetConfigOptionResult represents the result of session/set_config_option.
+// Returns the complete configuration state after the change.
+type SetConfigOptionResult struct {
+	ConfigOptions []SessionConfigOption `json:"configOptions"`
 }
 
 // ContentBlock represents a content block in ACP protocol.
