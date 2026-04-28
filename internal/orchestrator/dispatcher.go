@@ -35,6 +35,7 @@ type Dispatcher struct {
 	systemAssistant     agent.SystemAssistant
 	workflowRegistry    *workflow.WorkflowRegistry
 	interactionRecorder *InteractionRecorder
+	exitOnDispatcher    *ExitOnDispatcher
 }
 
 // NewDispatcher constructs a Dispatcher backed by the given registry and UI
@@ -58,6 +59,11 @@ func NewDispatcher(
 // SetInteractionRecorder sets the interaction recorder for persisting user commands.
 func (d *Dispatcher) SetInteractionRecorder(recorder *InteractionRecorder) {
 	d.interactionRecorder = recorder
+}
+
+// SetExitOnDispatcher sets the exit_on dispatcher for workflow story exit conditions.
+func (d *Dispatcher) SetExitOnDispatcher(exitOn *ExitOnDispatcher) {
+	d.exitOnDispatcher = exitOn
 }
 
 // WorkflowRegistry returns the workflow registry associated with this dispatcher.
@@ -87,6 +93,27 @@ func (d *Dispatcher) Dispatch(ctx context.Context, active *ActiveSession, input 
 	}
 
 	if isSlash {
+		// Check if this is an exit_on command for an active workflow task.
+		// The ExitOnDispatcher intercepts commands like /lock-goal when a
+		// matching task is Processing, closes the task, and invokes the handler.
+		if d.exitOnDispatcher != nil {
+			sessionID := active.GetSessionID()
+			cmdWithSlash := "/" + cmd
+			result := d.exitOnDispatcher.Dispatch(ctx, cmdWithSlash, sessionID)
+			if result.Handled {
+				// Command was handled by exit_on dispatcher.
+				msg := fmt.Sprintf("Goal locked and workflow advanced.")
+				if result.Error != nil {
+					msg = fmt.Sprintf("Handler error: %v", result.Error)
+				}
+				if d.ui != nil {
+					d.ui.RenderMessage(msg)
+				}
+				d.recordInteraction(ctx, active, input, true, cmd, msg, result.Error)
+				return nil
+			}
+		}
+
 		c, err := d.registry.Lookup(cmd)
 		if err != nil {
 			return fmt.Errorf("orchestrator: unknown command %q (type /help for a list): %w",

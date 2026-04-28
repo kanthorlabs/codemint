@@ -109,24 +109,22 @@ Based on the project's tech stack and conventions:
 
 ## Output Format
 
-When the user is satisfied with the goal and criteria, output JSON:
+When the user types `/lock-goal`, emit **raw JSON only** (no markdown fences, no explanation):
 
-```json
-{
-  "goal_text": "<one sentence goal>",
-  "success_criteria": [
-    "<criterion 1>",
-    "<criterion 2>"
-  ]
-}
 ```
+{"goal_text":"<one sentence goal>","success_criteria":["<criterion 1>","<criterion 2>"]}
+```
+
+The JSON must contain:
+- `goal_text`: non-empty string (the one-sentence goal)
+- `success_criteria`: non-empty array of 1-5 testable criterion strings
 
 ## Exit Condition
 
 The conversation ends when the user types `/lock-goal`. At that point:
 1. Confirm the final goal statement
-2. Confirm the success criteria
-3. Output the JSON above as your final response
+2. Confirm the success criteria  
+3. Output **only** the raw JSON above as your final response (no prose, no code fences)
 
 ## Handling Edge Cases
 

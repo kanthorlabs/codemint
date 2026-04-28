@@ -2,9 +2,7 @@
 name: brainstorming
 version: "1.0"
 description: |
-  5-phase brainstorming pipeline for feature planning.
-  Guides users through context gathering, specification clarification,
-  and task generation for new features.
+  Coding Workflow: Project Overview → Goal → Reality → Options → Plan → Verify → Confirm.
 
 # Workflow-level settings
 settings:
@@ -17,26 +15,21 @@ settings:
 # Epic → Story hierarchy
 epics:
   - id: planning
-    name: "Feature Planning"
-    description: "Gather context, clarify requirements, generate tasks"
+    name: "Coding Workflow"
+    description: "Goal-driven coding workflow with verification and confirmation"
 
     stories:
       - id: gather
-        name: "Context Intake"
+        name: "Project Overview"
         skill: "@codemint/gatherer"
         type: coding
 
-      - id: clarify
-        name: "Specification Clarification"
-        skill: "@codemint/spec-writer"
+      - id: capture_goal
+        name: "Goal Capture"
+        skill: "@codemint/goal-capture"
         type: coding
+        depends_on: gather
         exit_on:
-          command: "/generate"
-
-      - id: generate
-        name: "Task Generation"
-        skill: "@codemint/task-generator"
-        type: coding
+          command: "/lock-goal"
         output:
-          schema: "skills/task-generator/references/task-schema.json"
-          handler: "create_implementation_tasks"
+          handler: "lock_workflow_goal"
