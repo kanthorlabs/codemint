@@ -301,8 +301,12 @@ epics:
 			t.Fatalf("write file: %v", err)
 		}
 
-		// Create an empty skill resolver (skill won't be found).
+		// Create skill resolver with embedded workflow's required skills, but NOT @codemint/missing-skill.
 		resolver := newMockSkillResolver()
+		// Add skills required by the embedded brainstorming workflow to pass validation.
+		resolver.AddSkill("@codemint/gatherer")
+		resolver.AddSkill("@codemint/spec-writer")
+		resolver.AddSkill("@codemint/task-generator")
 
 		registry := NewFileRegistry()
 		err := registry.LoadAll(resolver)
