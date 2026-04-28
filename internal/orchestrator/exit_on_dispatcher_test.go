@@ -86,6 +86,15 @@ func (m *mockTaskRepoExitOn) ListCoordinationAfter(ctx context.Context, sessionI
 func (m *mockTaskRepoExitOn) MostRecentActive(ctx context.Context, sessionID string) (*domain.Task, error) {
 	return nil, nil
 }
+func (m *mockTaskRepoExitOn) CancelByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) error {
+	return nil
+}
+func (m *mockTaskRepoExitOn) GetMaxSeqTask(ctx context.Context, workflowID string) (int, error) {
+	return 0, nil
+}
+func (m *mockTaskRepoExitOn) ListByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) ([]*domain.Task, error) {
+	return nil, nil
+}
 
 func TestExitOnDispatcher_Register(t *testing.T) {
 	t.Parallel()

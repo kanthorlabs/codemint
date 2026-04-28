@@ -317,10 +317,16 @@ func (d *ExitOnDispatcher) GetRegistration(taskID string) (*ExitOnRegistrationIn
 	return nil, false
 }
 
-// RegisterForSession is a convenience method to register a task using its metadata.
-// It extracts the exit_on command from the story definition stored in task input.
+// RegisterFromStory is a convenience method to register a task using its metadata.
+// It extracts the exit_on commands from the story definition stored in task input.
+// Supports both single command and multi-command exit conditions.
 func (d *ExitOnDispatcher) RegisterFromStory(taskID, workflowID, sessionID string, story *domain.StoryDefinition) {
-	if story == nil || story.ExitOn == nil || story.ExitOn.Command == "" {
+	if story == nil || story.ExitOn == nil {
+		return
+	}
+
+	commands := story.ExitOn.GetCommands()
+	if len(commands) == 0 {
 		return
 	}
 
@@ -329,7 +335,10 @@ func (d *ExitOnDispatcher) RegisterFromStory(taskID, workflowID, sessionID strin
 		handlerName = story.Output.Handler
 	}
 
-	d.Register(taskID, workflowID, story.ExitOn.Command, handlerName, sessionID)
+	// Register each command that can trigger exit.
+	for _, cmd := range commands {
+		d.Register(taskID, workflowID, cmd, handlerName, sessionID)
+	}
 }
 
 // DeregisterSession removes all registrations for a session.

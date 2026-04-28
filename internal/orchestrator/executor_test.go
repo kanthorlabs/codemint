@@ -96,6 +96,15 @@ func (m *mockTaskRepo) ListPending(_ context.Context, _ string) ([]*domain.Task,
 func (m *mockTaskRepo) MostRecentActive(_ context.Context, _ string) (*domain.Task, error) {
 	return nil, nil
 }
+func (m *mockTaskRepo) CancelByWorkflowAndStoryIDs(_ context.Context, _ string, _ []string) error {
+	return nil
+}
+func (m *mockTaskRepo) GetMaxSeqTask(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
+func (m *mockTaskRepo) ListByWorkflowAndStoryIDs(_ context.Context, _ string, _ []string) ([]*domain.Task, error) {
+	return nil, nil
+}
 
 type mockAgentRepo struct {
 	human       *domain.Agent

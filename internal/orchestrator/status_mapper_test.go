@@ -102,6 +102,18 @@ func (m *statusMapperMockTaskRepo) MostRecentActive(ctx context.Context, session
 	return nil, nil
 }
 
+func (m *statusMapperMockTaskRepo) CancelByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) error {
+	return nil
+}
+
+func (m *statusMapperMockTaskRepo) GetMaxSeqTask(ctx context.Context, workflowID string) (int, error) {
+	return 0, nil
+}
+
+func (m *statusMapperMockTaskRepo) ListByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) ([]*domain.Task, error) {
+	return nil, nil
+}
+
 func (m *statusMapperMockTaskRepo) StatusUpdates() []statusUpdate {
 	m.mu.Lock()
 	defer m.mu.Unlock()

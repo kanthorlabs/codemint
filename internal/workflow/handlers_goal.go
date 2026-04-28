@@ -84,12 +84,20 @@ func LockWorkflowGoalHandler(repo repository.WorkflowRepository) HandlerFunc {
 	}
 }
 
+// RegisterBuiltinHandlersDeps holds dependencies for registering built-in handlers.
+type RegisterBuiltinHandlersDeps struct {
+	WorkflowRepo repository.WorkflowRepository
+	TaskRepo     repository.TaskRepository
+	FileRegistry *FileRegistry
+}
+
 // RegisterBuiltinHandlers registers all built-in output handlers.
 // Call this during application startup to make handlers available to the orchestrator.
-func RegisterBuiltinHandlers(registry *HandlerRegistry, workflowRepo repository.WorkflowRepository) error {
+func RegisterBuiltinHandlers(registry *HandlerRegistry, deps RegisterBuiltinHandlersDeps) error {
 	handlers := map[string]HandlerFunc{
-		"lock_workflow_goal":       LockWorkflowGoalHandler(workflowRepo),
-		"append_targeted_context":  AppendTargetedContextHandler(),
+		"lock_workflow_goal":      LockWorkflowGoalHandler(deps.WorkflowRepo),
+		"append_targeted_context": AppendTargetedContextHandler(),
+		"lock_chosen_option":      LockChosenOptionHandler(deps.WorkflowRepo, deps.TaskRepo, deps.FileRegistry),
 	}
 
 	for name, fn := range handlers {

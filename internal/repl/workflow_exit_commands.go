@@ -25,6 +25,20 @@ func RegisterWorkflowExitCommands(r *registry.CommandRegistry) error {
 			SupportedModes: []registry.ClientMode{registry.ClientModeCLI, registry.ClientModeDaemon},
 			Handler:        lockGoalHandler,
 		},
+		{
+			Name:           "pick-option",
+			Description:    "Select an implementation option (A, B, or C) and advance the workflow.",
+			Usage:          "/pick-option <A|B|C>",
+			SupportedModes: []registry.ClientMode{registry.ClientModeCLI, registry.ClientModeDaemon},
+			Handler:        pickOptionHandler,
+		},
+		{
+			Name:           "modify",
+			Description:    "Request modifications to the goal; resets workflow to goal capture.",
+			Usage:          "/modify",
+			SupportedModes: []registry.ClientMode{registry.ClientModeCLI, registry.ClientModeDaemon},
+			Handler:        modifyHandler,
+		},
 	}
 
 	for _, c := range commands {
@@ -44,6 +58,24 @@ func lockGoalHandler(_ context.Context, _ registry.ActiveSessionInfo, _ []string
 	// so we return a helpful message instead of silently doing nothing.
 	return registry.CommandResult{
 		Message: "No active goal capture in progress. Start a workflow first with `/workflow brainstorming`.",
+		Action:  registry.ActionNone,
+	}, nil
+}
+
+// pickOptionHandler is a no-op handler for /pick-option.
+// The actual work is done by ExitOnDispatcher when it intercepts this command.
+func pickOptionHandler(_ context.Context, _ registry.ActiveSessionInfo, _ []string, _ string) (registry.CommandResult, error) {
+	return registry.CommandResult{
+		Message: "No active options proposal in progress. The workflow must be at the propose_options stage.",
+		Action:  registry.ActionNone,
+	}, nil
+}
+
+// modifyHandler is a no-op handler for /modify.
+// The actual work is done by ExitOnDispatcher when it intercepts this command.
+func modifyHandler(_ context.Context, _ registry.ActiveSessionInfo, _ []string, _ string) (registry.CommandResult, error) {
+	return registry.CommandResult{
+		Message: "No active options proposal in progress. The workflow must be at the propose_options stage.",
 		Action:  registry.ActionNone,
 	}, nil
 }

@@ -95,6 +95,17 @@ func (r *FileRegistry) Get(name string) (*domain.WorkflowFile, bool) {
 	return wf, ok
 }
 
+// GetBySourcePath returns the workflow with the given source path, if present.
+// The source path is the absolute path to the WORKFLOW.yaml file.
+func (r *FileRegistry) GetBySourcePath(sourcePath string) (*domain.WorkflowFile, bool) {
+	for _, wf := range r.workflows {
+		if wf.SourcePath == sourcePath {
+			return wf, true
+		}
+	}
+	return nil, false
+}
+
 // All returns all registered workflows sorted by name.
 func (r *FileRegistry) All() []*domain.WorkflowFile {
 	wfs := make([]*domain.WorkflowFile, 0, len(r.workflows))

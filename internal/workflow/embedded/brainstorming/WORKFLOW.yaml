@@ -41,3 +41,15 @@ epics:
         depends_on: capture_goal
         output:
           handler: "append_targeted_context"
+
+      - id: propose_options
+        name: "Options Proposal"
+        skill: "@codemint/options-proposer"
+        type: coding
+        depends_on: gather_targeted
+        exit_on:
+          commands:
+            - "/pick-option"
+            - "/modify"
+        output:
+          handler: "lock_chosen_option"

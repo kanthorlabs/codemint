@@ -71,9 +71,23 @@ type StoryDefinition struct {
 
 // ExitCondition defines when a story should exit.
 type ExitCondition struct {
-	Command     string // Slash command that triggers exit (e.g., "/generate")
-	Timeout     int64  // Timeout in milliseconds
-	OutputValid bool   // Exit when output schema validates
+	Command     string   // Single slash command that triggers exit (e.g., "/generate")
+	Commands    []string // Multiple slash commands that can trigger exit (e.g., ["/pick-option", "/modify"])
+	Timeout     int64    // Timeout in milliseconds
+	OutputValid bool     // Exit when output schema validates
+}
+
+// GetCommands returns all commands that can trigger exit.
+// Returns Commands if set, otherwise wraps Command in a slice.
+// Returns nil if neither is set.
+func (e *ExitCondition) GetCommands() []string {
+	if len(e.Commands) > 0 {
+		return e.Commands
+	}
+	if e.Command != "" {
+		return []string{e.Command}
+	}
+	return nil
 }
 
 // OutputConfig defines the output handling for a story.

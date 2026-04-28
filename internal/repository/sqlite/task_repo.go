@@ -358,3 +358,101 @@ func (r *taskRepo) MostRecentActive(ctx context.Context, sessionID string) (*dom
 	}
 	return &t, nil
 }
+
+// CancelByWorkflowAndStoryIDs cancels all tasks in the given workflow that
+// match the specified story IDs. Only cancels tasks that are not in a terminal
+// state (Success, Failure, Completed, Reverted, Cancelled).
+func (r *taskRepo) CancelByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) error {
+	if len(storyIDs) == 0 {
+		return nil
+	}
+
+	// Build the IN clause for story IDs.
+	// Story ID is stored as part of the input JSON, but we also track it as
+	// a combination of seq_story. For simplicity, we use seq_story matching.
+	// However, the actual story ID is in input.story_id. Let's use JSON extraction.
+	//
+	// Actually, looking at the task creation in orchestrator, the story_id is stored
+	// in the Input JSON field. We need to extract it.
+	// For SQLite, we use json_extract(input, '$.story_id').
+
+	placeholders := make([]string, len(storyIDs))
+	args := make([]any, 0, len(storyIDs)+1)
+	args = append(args, int(domain.TaskStatusCancelled), workflowID)
+
+	for i, sid := range storyIDs {
+		placeholders[i] = "?"
+		args = append(args, sid)
+	}
+
+	// Cancel tasks that are in Pending, Processing, or Awaiting state.
+	// Terminal states are not touched.
+	query := fmt.Sprintf(`
+		UPDATE task
+		SET status = ?
+		WHERE workflow_id = ?
+		  AND json_extract(input, '$.story_id') IN (%s)
+		  AND status IN (?, ?, ?)`,
+		strings.Join(placeholders, ","),
+	)
+
+	// Add the non-terminal statuses we want to cancel from.
+	args = append(args,
+		int(domain.TaskStatusPending),
+		int(domain.TaskStatusProcessing),
+		int(domain.TaskStatusAwaiting),
+	)
+
+	_, err := r.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("sqlite: cancel tasks by workflow and story IDs: %w", err)
+	}
+	return nil
+}
+
+// GetMaxSeqTask returns the maximum seq_task value for tasks in the given workflow.
+// Returns 0 if no tasks exist for the workflow.
+func (r *taskRepo) GetMaxSeqTask(ctx context.Context, workflowID string) (int, error) {
+	const query = `SELECT COALESCE(MAX(seq_task), 0) FROM task WHERE workflow_id = ?`
+
+	var maxSeq int
+	err := r.db.GetContext(ctx, &maxSeq, query, workflowID)
+	if err != nil {
+		return 0, fmt.Errorf("sqlite: get max seq_task for workflow %q: %w", workflowID, err)
+	}
+	return maxSeq, nil
+}
+
+// ListByWorkflowAndStoryIDs returns all tasks for the given workflow that match
+// the specified story IDs, ordered by (seq_epic, seq_story, seq_task) DESC.
+func (r *taskRepo) ListByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) ([]*domain.Task, error) {
+	if len(storyIDs) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(storyIDs))
+	args := make([]any, 0, len(storyIDs)+1)
+	args = append(args, workflowID)
+
+	for i, sid := range storyIDs {
+		placeholders[i] = "?"
+		args = append(args, sid)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, project_id, session_id, workflow_id, assignee_id,
+		       seq_epic, seq_story, seq_task, type, status, timeout, input, output, client_id,
+		       depends_on, condition
+		FROM task
+		WHERE workflow_id = ?
+		  AND json_extract(input, '$.story_id') IN (%s)
+		ORDER BY seq_epic DESC, seq_story DESC, seq_task DESC`,
+		strings.Join(placeholders, ","),
+	)
+
+	var tasks []*domain.Task
+	if err := r.db.SelectContext(ctx, &tasks, query, args...); err != nil {
+		return nil, fmt.Errorf("sqlite: list tasks by workflow and story IDs: %w", err)
+	}
+	return tasks, nil
+}

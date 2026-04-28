@@ -75,7 +75,11 @@ func TestTargetedGather_E2E(t *testing.T) {
 
 	// Create handler registry and register all handlers.
 	handlerRegistry := workflow.NewHandlerRegistry()
-	err := workflow.RegisterBuiltinHandlers(handlerRegistry, workflowRepo)
+	err := workflow.RegisterBuiltinHandlers(handlerRegistry, workflow.RegisterBuiltinHandlersDeps{
+		WorkflowRepo: workflowRepo,
+		TaskRepo:     taskRepo,
+		FileRegistry: nil,
+	})
 	if err != nil {
 		t.Fatalf("RegisterBuiltinHandlers failed: %v", err)
 	}
@@ -145,7 +149,11 @@ func TestTargetedGather_E2E_SkippedGreenfield(t *testing.T) {
 
 	// Create handler registry.
 	handlerRegistry := workflow.NewHandlerRegistry()
-	_ = workflow.RegisterBuiltinHandlers(handlerRegistry, workflowRepo)
+	_ = workflow.RegisterBuiltinHandlers(handlerRegistry, workflow.RegisterBuiltinHandlersDeps{
+		WorkflowRepo: workflowRepo,
+		TaskRepo:     taskRepo,
+		FileRegistry: nil,
+	})
 
 	// Invoke the handler.
 	ctx := context.Background()
@@ -200,7 +208,11 @@ func TestTargetedGather_E2E_MalformedJSON(t *testing.T) {
 
 	// Create handler registry.
 	handlerRegistry := workflow.NewHandlerRegistry()
-	_ = workflow.RegisterBuiltinHandlers(handlerRegistry, workflowRepo)
+	_ = workflow.RegisterBuiltinHandlers(handlerRegistry, workflow.RegisterBuiltinHandlersDeps{
+		WorkflowRepo: workflowRepo,
+		TaskRepo:     taskRepo,
+		FileRegistry: nil,
+	})
 
 	// Invoke the handler.
 	ctx := context.Background()
@@ -228,6 +240,9 @@ func TestTargetedGather_E2E_MalformedJSON(t *testing.T) {
 func TestTargetedGather_E2E_SkippedWithoutReason(t *testing.T) {
 	t.Parallel()
 
+	taskRepo := &mockTargetedGatherTaskRepo{
+		tasks: make(map[string]*domain.Task),
+	}
 	workflowRepo := &mockTargetedGatherWorkflowRepo{
 		workflows: make(map[string]*domain.Workflow),
 	}
@@ -250,7 +265,11 @@ func TestTargetedGather_E2E_SkippedWithoutReason(t *testing.T) {
 
 	// Create handler registry.
 	handlerRegistry := workflow.NewHandlerRegistry()
-	_ = workflow.RegisterBuiltinHandlers(handlerRegistry, workflowRepo)
+	_ = workflow.RegisterBuiltinHandlers(handlerRegistry, workflow.RegisterBuiltinHandlersDeps{
+		WorkflowRepo: workflowRepo,
+		TaskRepo:     taskRepo,
+		FileRegistry: nil,
+	})
 
 	// Invoke the handler.
 	ctx := context.Background()
@@ -273,6 +292,9 @@ func TestTargetedGather_E2E_SkippedWithoutReason(t *testing.T) {
 func TestTargetedGather_E2E_MissingRequiredFields(t *testing.T) {
 	t.Parallel()
 
+	taskRepo := &mockTargetedGatherTaskRepo{
+		tasks: make(map[string]*domain.Task),
+	}
 	workflowRepo := &mockTargetedGatherWorkflowRepo{
 		workflows: make(map[string]*domain.Workflow),
 	}
@@ -294,7 +316,11 @@ func TestTargetedGather_E2E_MissingRequiredFields(t *testing.T) {
 	}
 
 	handlerRegistry := workflow.NewHandlerRegistry()
-	_ = workflow.RegisterBuiltinHandlers(handlerRegistry, workflowRepo)
+	_ = workflow.RegisterBuiltinHandlers(handlerRegistry, workflow.RegisterBuiltinHandlersDeps{
+		WorkflowRepo: workflowRepo,
+		TaskRepo:     taskRepo,
+		FileRegistry: nil,
+	})
 
 	ctx := context.Background()
 	handlerArgs := workflow.HandlerArgs{
@@ -358,6 +384,15 @@ func (m *mockTargetedGatherTaskRepo) ListCoordinationAfter(ctx context.Context, 
 func (m *mockTargetedGatherTaskRepo) MostRecentActive(ctx context.Context, sessionID string) (*domain.Task, error) {
 	return nil, nil
 }
+func (m *mockTargetedGatherTaskRepo) CancelByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) error {
+	return nil
+}
+func (m *mockTargetedGatherTaskRepo) GetMaxSeqTask(ctx context.Context, workflowID string) (int, error) {
+	return 0, nil
+}
+func (m *mockTargetedGatherTaskRepo) ListByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) ([]*domain.Task, error) {
+	return nil, nil
+}
 
 // mockTargetedGatherWorkflowRepo implements repository.WorkflowRepository for E2E tests.
 type mockTargetedGatherWorkflowRepo struct {
@@ -394,5 +429,8 @@ func (m *mockTargetedGatherWorkflowRepo) ListBySession(ctx context.Context, sess
 	return nil, nil
 }
 func (m *mockTargetedGatherWorkflowRepo) LockChosenOption(ctx context.Context, workflowID, optionJSON string) error {
+	return nil
+}
+func (m *mockTargetedGatherWorkflowRepo) ResetGOROW(ctx context.Context, workflowID string) error {
 	return nil
 }

@@ -74,6 +74,15 @@ func (m *mockTaskRepoForScheduler) ListPending(_ context.Context, _ string) ([]*
 func (m *mockTaskRepoForScheduler) MostRecentActive(_ context.Context, _ string) (*domain.Task, error) {
 	return nil, nil
 }
+func (m *mockTaskRepoForScheduler) CancelByWorkflowAndStoryIDs(_ context.Context, _ string, _ []string) error {
+	return nil
+}
+func (m *mockTaskRepoForScheduler) GetMaxSeqTask(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
+func (m *mockTaskRepoForScheduler) ListByWorkflowAndStoryIDs(_ context.Context, _ string, _ []string) ([]*domain.Task, error) {
+	return nil, nil
+}
 
 type mockExecutorForScheduler struct {
 	executedTasks []*domain.Task
@@ -597,6 +606,15 @@ func (m *eligibilityMockTaskRepo) ListBySession(_ context.Context, _ string) ([]
 	return nil, nil
 }
 func (m *eligibilityMockTaskRepo) MostRecentActive(_ context.Context, _ string) (*domain.Task, error) {
+	return nil, nil
+}
+func (m *eligibilityMockTaskRepo) CancelByWorkflowAndStoryIDs(_ context.Context, _ string, _ []string) error {
+	return nil
+}
+func (m *eligibilityMockTaskRepo) GetMaxSeqTask(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
+func (m *eligibilityMockTaskRepo) ListByWorkflowAndStoryIDs(_ context.Context, _ string, _ []string) ([]*domain.Task, error) {
 	return nil, nil
 }
 

@@ -49,7 +49,11 @@ func TestGoalCapture_E2E(t *testing.T) {
 
 	// Create handler registry and register the lock_workflow_goal handler.
 	handlerRegistry := workflow.NewHandlerRegistry()
-	err := workflow.RegisterBuiltinHandlers(handlerRegistry, workflowRepo)
+	err := workflow.RegisterBuiltinHandlers(handlerRegistry, workflow.RegisterBuiltinHandlersDeps{
+		WorkflowRepo: workflowRepo,
+		TaskRepo:     taskRepo,
+		FileRegistry: nil, // Not needed for this test
+	})
 	if err != nil {
 		t.Fatalf("RegisterBuiltinHandlers failed: %v", err)
 	}
@@ -173,7 +177,11 @@ func TestGoalCapture_E2E_HandlerFailure(t *testing.T) {
 
 	// Create handler registry.
 	handlerRegistry := workflow.NewHandlerRegistry()
-	_ = workflow.RegisterBuiltinHandlers(handlerRegistry, workflowRepo)
+	_ = workflow.RegisterBuiltinHandlers(handlerRegistry, workflow.RegisterBuiltinHandlersDeps{
+		WorkflowRepo: workflowRepo,
+		TaskRepo:     taskRepo,
+		FileRegistry: nil,
+	})
 
 	// Create the ExitOnDispatcher.
 	exitOnDispatcher := NewExitOnDispatcher(ExitOnDispatcherConfig{
@@ -242,7 +250,11 @@ func TestGoalCapture_E2E_AlreadyLocked(t *testing.T) {
 
 	// Create handler registry.
 	handlerRegistry := workflow.NewHandlerRegistry()
-	_ = workflow.RegisterBuiltinHandlers(handlerRegistry, workflowRepo)
+	_ = workflow.RegisterBuiltinHandlers(handlerRegistry, workflow.RegisterBuiltinHandlersDeps{
+		WorkflowRepo: workflowRepo,
+		TaskRepo:     taskRepo,
+		FileRegistry: nil,
+	})
 
 	// Create the ExitOnDispatcher.
 	exitOnDispatcher := NewExitOnDispatcher(ExitOnDispatcherConfig{
@@ -329,6 +341,15 @@ func (m *mockGoalCaptureTaskRepo) ListCoordinationAfter(ctx context.Context, ses
 func (m *mockGoalCaptureTaskRepo) MostRecentActive(ctx context.Context, sessionID string) (*domain.Task, error) {
 	return nil, nil
 }
+func (m *mockGoalCaptureTaskRepo) CancelByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) error {
+	return nil
+}
+func (m *mockGoalCaptureTaskRepo) GetMaxSeqTask(ctx context.Context, workflowID string) (int, error) {
+	return 0, nil
+}
+func (m *mockGoalCaptureTaskRepo) ListByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) ([]*domain.Task, error) {
+	return nil, nil
+}
 
 // mockGoalCaptureWorkflowRepo implements repository.WorkflowRepository for E2E tests.
 type mockGoalCaptureWorkflowRepo struct {
@@ -375,5 +396,8 @@ func (m *mockGoalCaptureWorkflowRepo) ListBySession(ctx context.Context, session
 	return nil, nil
 }
 func (m *mockGoalCaptureWorkflowRepo) LockChosenOption(ctx context.Context, workflowID, optionJSON string) error {
+	return nil
+}
+func (m *mockGoalCaptureWorkflowRepo) ResetGOROW(ctx context.Context, workflowID string) error {
 	return nil
 }

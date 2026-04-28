@@ -210,3 +210,21 @@ func (r *workflowRepo) LockChosenOption(ctx context.Context, workflowID, optionJ
 	}
 	return nil
 }
+
+// ResetGOROW clears goal_text, success_criteria, and chosen_option back to NULL.
+// Used by /modify to loop back to Goal Capture.
+func (r *workflowRepo) ResetGOROW(ctx context.Context, workflowID string) error {
+	const query = `UPDATE workflow SET goal_text = NULL, success_criteria = NULL, chosen_option = NULL WHERE id = ?`
+	result, err := r.db.ExecContext(ctx, query, workflowID)
+	if err != nil {
+		return fmt.Errorf("sqlite: reset GOROW for workflow %q: %w", workflowID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: reset GOROW for workflow %q: %w", workflowID, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("sqlite: workflow %q not found", workflowID)
+	}
+	return nil
+}

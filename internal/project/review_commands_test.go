@@ -72,6 +72,18 @@ func (m *mockTaskRepo) MostRecentActive(_ context.Context, _ string) (*domain.Ta
 	return nil, nil
 }
 
+func (m *mockTaskRepo) CancelByWorkflowAndStoryIDs(_ context.Context, _ string, _ []string) error {
+	return nil
+}
+
+func (m *mockTaskRepo) GetMaxSeqTask(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
+
+func (m *mockTaskRepo) ListByWorkflowAndStoryIDs(_ context.Context, _ string, _ []string) ([]*domain.Task, error) {
+	return nil, nil
+}
+
 // --- Mock CodingAgent ---
 
 type mockCodingAgent struct {

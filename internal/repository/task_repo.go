@@ -69,4 +69,20 @@ type TaskRepository interface {
 	// to default to the current active task when no task ID is specified.
 	// Returns nil, nil when no active task exists.
 	MostRecentActive(ctx context.Context, sessionID string) (*domain.Task, error)
+
+	// CancelByWorkflowAndStoryIDs cancels all tasks in the given workflow that
+	// match the specified story IDs. Used by /modify to cancel existing
+	// Goal/Reality/Options tasks before re-creating them.
+	// Only cancels tasks that are not in a terminal state (Success, Failure, Completed, Reverted, Cancelled).
+	CancelByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) error
+
+	// GetMaxSeqTask returns the maximum seq_task value for tasks in the given workflow.
+	// Used to determine the next seq_task for newly created tasks.
+	// Returns 0 if no tasks exist for the workflow.
+	GetMaxSeqTask(ctx context.Context, workflowID string) (int, error)
+
+	// ListByWorkflowAndStoryIDs returns all tasks for the given workflow that match
+	// the specified story IDs, ordered by (seq_epic, seq_story, seq_task) DESC.
+	// Used to find existing tasks for regeneration.
+	ListByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) ([]*domain.Task, error)
 }

@@ -46,4 +46,8 @@ type WorkflowRepository interface {
 	// LockChosenOption writes chosen_option for a workflow.
 	// Returns an error if the field is already set (one-shot lock semantics).
 	LockChosenOption(ctx context.Context, workflowID, optionJSON string) error
+
+	// ResetGOROW clears goal_text, success_criteria, and chosen_option back to NULL.
+	// Used by /modify to loop back to Goal Capture.
+	ResetGOROW(ctx context.Context, workflowID string) error
 }

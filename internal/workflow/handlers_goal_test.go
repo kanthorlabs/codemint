@@ -61,6 +61,10 @@ func (m *mockWorkflowRepo) LockChosenOption(ctx context.Context, workflowID, opt
 	return nil
 }
 
+func (m *mockWorkflowRepo) ResetGOROW(ctx context.Context, workflowID string) error {
+	return nil
+}
+
 func TestLockWorkflowGoalHandler_HappyPath(t *testing.T) {
 	t.Parallel()
 
@@ -338,8 +342,13 @@ func TestRegisterBuiltinHandlers(t *testing.T) {
 
 	registry := NewHandlerRegistry()
 	repo := &mockWorkflowRepo{}
+	deps := RegisterBuiltinHandlersDeps{
+		WorkflowRepo: repo,
+		TaskRepo:     nil, // Not needed for basic registration test
+		FileRegistry: nil, // Not needed for basic registration test
+	}
 
-	err := RegisterBuiltinHandlers(registry, repo)
+	err := RegisterBuiltinHandlers(registry, deps)
 	if err != nil {
 		t.Fatalf("RegisterBuiltinHandlers failed: %v", err)
 	}
@@ -348,6 +357,11 @@ func TestRegisterBuiltinHandlers(t *testing.T) {
 	if !registry.Has("lock_workflow_goal") {
 		t.Error("lock_workflow_goal handler not registered")
 	}
+
+	// Verify lock_chosen_option is registered.
+	if !registry.Has("lock_chosen_option") {
+		t.Error("lock_chosen_option handler not registered")
+	}
 }
 
 func TestRegisterBuiltinHandlers_Idempotent(t *testing.T) {
@@ -355,14 +369,19 @@ func TestRegisterBuiltinHandlers_Idempotent(t *testing.T) {
 
 	registry := NewHandlerRegistry()
 	repo := &mockWorkflowRepo{}
+	deps := RegisterBuiltinHandlersDeps{
+		WorkflowRepo: repo,
+		TaskRepo:     nil,
+		FileRegistry: nil,
+	}
 
-	err := RegisterBuiltinHandlers(registry, repo)
+	err := RegisterBuiltinHandlers(registry, deps)
 	if err != nil {
 		t.Fatalf("First RegisterBuiltinHandlers failed: %v", err)
 	}
 
 	// Second registration should fail due to duplicate.
-	err = RegisterBuiltinHandlers(registry, repo)
+	err = RegisterBuiltinHandlers(registry, deps)
 	if err == nil {
 		t.Error("Expected error for duplicate registration")
 	}

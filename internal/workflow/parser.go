@@ -14,12 +14,13 @@ import (
 
 // Parser errors.
 var (
-	ErrMissingName    = errors.New("workflow: missing required field: name")
-	ErrMissingVersion = errors.New("workflow: missing required field: version")
-	ErrMissingEpics   = errors.New("workflow: missing required field: epics")
-	ErrNameMismatch   = errors.New("workflow: name does not match directory name")
-	ErrInvalidEpic    = errors.New("workflow: invalid epic definition")
-	ErrInvalidStory   = errors.New("workflow: invalid story definition")
+	ErrMissingName       = errors.New("workflow: missing required field: name")
+	ErrMissingVersion    = errors.New("workflow: missing required field: version")
+	ErrMissingEpics      = errors.New("workflow: missing required field: epics")
+	ErrNameMismatch      = errors.New("workflow: name does not match directory name")
+	ErrInvalidEpic       = errors.New("workflow: invalid epic definition")
+	ErrInvalidStory      = errors.New("workflow: invalid story definition")
+	ErrInvalidExitOn     = errors.New("workflow: invalid exit_on: must specify exactly one of command or commands")
 )
 
 // workflowYAML is the internal YAML representation of a WORKFLOW.yaml file.
@@ -66,9 +67,10 @@ type storyYAML struct {
 }
 
 type exitConditionYAML struct {
-	Command     string `yaml:"command"`
-	Timeout     int64  `yaml:"timeout"`
-	OutputValid bool   `yaml:"output_valid"`
+	Command     string   `yaml:"command"`
+	Commands    []string `yaml:"commands"`
+	Timeout     int64    `yaml:"timeout"`
+	OutputValid bool     `yaml:"output_valid"`
 }
 
 type outputConfigYAML struct {
@@ -235,8 +237,16 @@ func convertStories(raws []storyYAML, epicIdx int) ([]domain.StoryDefinition, er
 
 		// Convert exit condition.
 		if raw.ExitOn != nil {
+			// Validate: exactly one of command or commands must be set (if either is set).
+			hasCommand := raw.ExitOn.Command != ""
+			hasCommands := len(raw.ExitOn.Commands) > 0
+			if hasCommand && hasCommands {
+				return nil, fmt.Errorf("%w: epic[%d].story[%d] has both command and commands", ErrInvalidExitOn, epicIdx, i)
+			}
+
 			story.ExitOn = &domain.ExitCondition{
 				Command:     raw.ExitOn.Command,
+				Commands:    raw.ExitOn.Commands,
 				Timeout:     raw.ExitOn.Timeout,
 				OutputValid: raw.ExitOn.OutputValid,
 			}

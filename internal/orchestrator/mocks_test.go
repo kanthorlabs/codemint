@@ -195,6 +195,18 @@ func (m *interceptorMockTaskRepo) MostRecentActive(ctx context.Context, sessionI
 	return nil, nil
 }
 
+func (m *interceptorMockTaskRepo) CancelByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) error {
+	return nil
+}
+
+func (m *interceptorMockTaskRepo) GetMaxSeqTask(ctx context.Context, workflowID string) (int, error) {
+	return 0, nil
+}
+
+func (m *interceptorMockTaskRepo) ListByWorkflowAndStoryIDs(ctx context.Context, workflowID string, storyIDs []string) ([]*domain.Task, error) {
+	return nil, nil
+}
+
 func (m *interceptorMockTaskRepo) StatusUpdates() []statusUpdate {
 	m.mu.Lock()
 	defer m.mu.Unlock()

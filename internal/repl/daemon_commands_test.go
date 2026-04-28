@@ -69,6 +69,15 @@ func (m *mockTaskRepoForDaemon) MostRecentActive(_ context.Context, sessionID st
 	}
 	return nil, nil
 }
+func (m *mockTaskRepoForDaemon) CancelByWorkflowAndStoryIDs(_ context.Context, _ string, _ []string) error {
+	return nil
+}
+func (m *mockTaskRepoForDaemon) GetMaxSeqTask(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
+func (m *mockTaskRepoForDaemon) ListByWorkflowAndStoryIDs(_ context.Context, _ string, _ []string) ([]*domain.Task, error) {
+	return nil, nil
+}
 
 // mockActiveSessionForDaemon implements MutableSessionInfo for testing.
 type mockActiveSessionForDaemon struct {

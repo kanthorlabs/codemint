@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["options"],
+  "properties": {
+    "options": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "summary", "files_touched_estimate", "pros", "cons", "risk_level"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-C]$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "files_touched_estimate": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pros": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "cons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "risk_level": {
+            "type": "string",
+            "enum": ["low", "medium", "high"]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "reason_for_single": {
+      "type": ["string", "null"]
+    }
+  },
+  "additionalProperties": false
+}
